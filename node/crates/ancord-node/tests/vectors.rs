@@ -188,3 +188,44 @@ fn client_auth() {
     assert_eq!(b64u_encode(&sig), s(&v, "signature"));
     assert!(sign::verify(&client.pubkey(), sign::DOMAIN_CLIENT_AUTH, &payload, &sig));
 }
+
+#[test]
+fn hrw() {
+    let v = load("hrw.json");
+    let mailbox: [u8; 32] = b64u_decode_array(s(&v, "mailbox_id")).unwrap();
+    let ids: Vec<String> = serde_json::from_value(v["node_ids"].clone()).unwrap();
+    for case in v["cases"].as_array().unwrap() {
+        let epoch = case["epoch"].as_u64().unwrap();
+        for w in case["weights"].as_array().unwrap() {
+            assert_eq!(hex_encode(&ancord_node::hrw::weight(&mailbox, s(w, "id"), epoch)), s(w, "weight_hex"));
+        }
+        let got = ancord_node::hrw::anchors(&mailbox, ids.iter().map(String::as_str), epoch, case["r"].as_u64().unwrap() as usize);
+        let want: Vec<String> = serde_json::from_value(case["anchors"].clone()).unwrap();
+        assert_eq!(got, want);
+    }
+}
+
+#[test]
+fn ratchet() {
+    use ancord_node::ratchet::{mailbox_id, Direction, Receiver, Sender};
+    let v = load("ratchet.json");
+    let ss: [u8; 32] = b64u_decode_array(s(&v, "shared_secret")).unwrap();
+    assert_eq!(v["max_skip"].as_u64().unwrap(), u64::from(ancord_node::ratchet::MAX_SKIP));
+    for d in v["dirs"].as_array().unwrap() {
+        let dir = match s(d, "dir") {
+            "i2r" => Direction::InitiatorToResponder,
+            _ => Direction::ResponderToInitiator,
+        };
+        assert_eq!(b64u_encode(&mailbox_id(&ss, dir)), s(d, "mailbox_id"));
+        let mut tx = Sender::new(&ss, dir);
+        let mut rx = Receiver::new(&ss, dir);
+        for m in d["messages"].as_array().unwrap() {
+            let id: [u8; 16] = b64u_decode_array(s(m, "id")).unwrap();
+            let plaintext = b64u_decode(s(m, "plaintext_b64")).unwrap();
+            // odesílatel musí vyrobit přesně stejné bajty jako referenční implementace
+            assert_eq!(tx.seal(&id, &plaintext).unwrap(), s(m, "ct"));
+            // příjemce referenční ciphertext otevře
+            assert_eq!(rx.open(&id, s(m, "ct")).unwrap(), plaintext);
+        }
+    }
+}

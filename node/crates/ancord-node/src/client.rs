@@ -2,7 +2,7 @@
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
@@ -10,11 +10,14 @@ use axum::response::Response;
 use rand::RngCore;
 use serde_json::{json, Value};
 
+use crate::data::{self, DataError};
 use crate::encoding::{b64u_decode_array, b64u_encode};
+use crate::peer;
 use crate::sign::{self, DOMAIN_CLIENT_AUTH};
 use crate::state::NodeState;
 use crate::ticket::{verify_ticket, TicketBody, TicketError};
 use crate::time::unix_now;
+use crate::wake;
 
 const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 pub const CLOSE_UNAUTHORIZED: u16 = 4401;
@@ -109,12 +112,27 @@ async fn session(st: Arc<NodeState>, mut socket: WebSocket) {
         return;
     }
 
-    // data plane (B3) naváže tady; zatím jen ping/pong
+    let mut bucket = Bucket::new(st.cfg.client_msg_rate);
     while let Some(Ok(frame)) = socket.recv().await {
         match frame {
             Message::Text(text) => {
-                let is_ping = serde_json::from_str::<Value>(text.as_str()).is_ok_and(|m| m["t"] == "ping");
-                if is_ping && socket.send(Message::text(json!({"t": "pong"}).to_string())).await.is_err() {
+                let Ok(msg) = serde_json::from_str::<Value>(text.as_str()) else {
+                    let reply = error_reply(&DataError::BadRequest("invalid JSON"), None);
+                    if socket.send(Message::text(reply.to_string())).await.is_err() {
+                        return;
+                    }
+                    continue;
+                };
+                let reply = if msg["t"] == "ping" {
+                    json!({"t": "pong"})
+                } else if !bucket.take() {
+                    let mut r = json!({"t": "error", "code": "rate_limited", "reason": "too many messages"});
+                    attach_rid(&mut r, &msg);
+                    r
+                } else {
+                    handle(&st, &msg).await
+                };
+                if socket.send(Message::text(reply.to_string())).await.is_err() {
                     return;
                 }
             }
@@ -122,4 +140,86 @@ async fn session(st: Arc<NodeState>, mut socket: WebSocket) {
             _ => {}
         }
     }
+}
+
+/// Token bucket na jedno spojení: `rate` zpráv za sekundu, okamžitě až dvojnásobek.
+struct Bucket {
+    rate: f64,
+    capacity: f64,
+    tokens: f64,
+    last: Instant,
+}
+
+impl Bucket {
+    fn new(rate: u64) -> Self {
+        let rate = rate.max(1) as f64;
+        Self { rate, capacity: rate * 2.0, tokens: rate * 2.0, last: Instant::now() }
+    }
+
+    fn take(&mut self) -> bool {
+        let now = Instant::now();
+        self.tokens = (self.tokens + now.duration_since(self.last).as_secs_f64() * self.rate).min(self.capacity);
+        self.last = now;
+        if self.tokens < 1.0 {
+            return false;
+        }
+        self.tokens -= 1.0;
+        true
+    }
+}
+
+fn attach_rid(reply: &mut Value, request: &Value) {
+    if let Some(rid) = request["rid"].as_str().filter(|r| r.len() <= 64) {
+        reply["rid"] = json!(rid);
+    }
+}
+
+fn error_reply(e: &DataError, request: Option<&Value>) -> Value {
+    let mut reply = json!({"t": "error", "code": e.code(), "reason": e.to_string()});
+    if let Some(req) = request {
+        attach_rid(&mut reply, req);
+    }
+    reply
+}
+
+/// Zpracuje `send`, `fetch` nebo `ack` (`spec/PROTOCOL.md` §13.3).
+async fn handle(st: &Arc<NodeState>, msg: &Value) -> Value {
+    let result = match msg["t"].as_str() {
+        Some("send") => do_send(st, msg).await,
+        Some("fetch") => do_fetch(st, msg).await,
+        Some("ack") => do_ack(st, msg).await,
+        _ => Err(DataError::BadRequest("unknown message type")),
+    };
+    let mut reply = result.unwrap_or_else(|e| error_reply(&e, None));
+    attach_rid(&mut reply, msg);
+    reply
+}
+
+fn field<'a>(msg: &'a Value, name: &'static str) -> Result<&'a str, DataError> {
+    msg[name].as_str().ok_or(DataError::BadRequest(name))
+}
+
+async fn do_send(st: &Arc<NodeState>, msg: &Value) -> Result<Value, DataError> {
+    let mailbox = data::parse_mailbox(field(msg, "mailbox_id")?)?;
+    let id = data::parse_id(field(msg, "id")?)?;
+    let ct = data::parse_ct(field(msg, "ct")?)?;
+    let ts = msg["ts"].as_u64().ok_or(DataError::BadRequest("ts"))?;
+    data::check_ts(ts, unix_now())?;
+    let push_id = wake::optional_push_id(&msg["push_id"])?;
+    let acks = data::send_with_push(st, mailbox, id, ts, ct, push_id).await?;
+    Ok(json!({"t": "sent", "id": b64u_encode(&id), "acks": acks}))
+}
+
+async fn do_fetch(st: &Arc<NodeState>, msg: &Value) -> Result<Value, DataError> {
+    let mailbox = data::parse_mailbox(field(msg, "mailbox_id")?)?;
+    let list = data::fetch(st, mailbox, data::clamp_limit(msg["limit"].as_u64())).await?;
+    Ok(json!({"t": "messages", "mailbox_id": b64u_encode(&mailbox), "messages": list.iter().map(|m| m.to_json(false)).collect::<Vec<_>>()}))
+}
+
+async fn do_ack(st: &Arc<NodeState>, msg: &Value) -> Result<Value, DataError> {
+    let mailbox = data::parse_mailbox(field(msg, "mailbox_id")?)?;
+    let ids = peer::parse_ids(&msg["ids"])?;
+    let n = ids.len();
+    data::ack(st, mailbox, ids).await?;
+    Ok(json!({"t": "acked", "n": n}))
 }

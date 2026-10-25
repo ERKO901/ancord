@@ -49,7 +49,8 @@ describe("GET /route (A3)", () => {
       expect(check.ok).toBe(true);
       if (check.ok) {
         expect(check.body.ek).toBe(EK);
-        expect(check.body.exp).toBe(nowS + body.ttl);
+        // nowS se počítá až po requestu, na hraně sekundy se může lišit o 1
+        expect(Math.abs(check.body.exp - (nowS + body.ttl))).toBeLessThanOrEqual(1);
         expect(check.body.nid).toBe(n.node_id);
       }
       // ticket jednoho nodu neplatí na jiném

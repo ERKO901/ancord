@@ -2,13 +2,22 @@ import { sha256 } from "../crypto";
 import { b64uEncode, utf8 } from "../encoding";
 import type { Snapshot, SnapshotNode } from "../routing";
 import { all, getMeta, setMeta, type NodeRow } from "./store";
-import { epochOf } from "./directory";
+import { epochOf, type SignedDirectory } from "./directory";
 import { scoreOf } from "./scoring";
 import type { RegCtx } from "./context";
 
 export const KV_SNAPSHOT = "routing:snapshot";
 export const KV_DIRECTORY = "directory:current";
 export const kvDirectoryKey = (epoch: number) => `directory:e:${epoch}`;
+
+/** Adresář epochy do KV (klíč epochy i `current`), odkud ho čtou `/directory` a `/wake`. */
+export async function publishDirectory(env: RegCtx["env"], directory: SignedDirectory): Promise<void> {
+  const json = JSON.stringify(directory);
+  await Promise.all([
+    env.ROUTING_KV.put(KV_DIRECTORY, json, { expirationTtl: 3600 }),
+    env.ROUTING_KV.put(kvDirectoryKey(directory.body.epoch), json, { expirationTtl: 3600 }),
+  ]);
+}
 
 const round3 = (x: number) => Math.round(x * 1000) / 1000;
 

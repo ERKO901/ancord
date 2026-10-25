@@ -153,7 +153,7 @@ Textová zpráva `ping` (bez JSON) obslouží runtime Workeru odpovědí `pong` 
  "load":{"conns":12,"max_conns":2000,"cpu_pct":8,"mem_pct":31},
  "sig":"<b64u>"}
 ```
-`sig` = Ed25519 přes doménu `ancord/v1/heartbeat` a `payload = kanonické JSON zprávy bez pole sig`. `seq` musí striktně růst v rámci jednoho spojení (po připojení Worker čítač vynuluje, první heartbeat může mít `seq = 0`), `|now − ts| ≤ 60 s`. `epoch` je poslední adresář, který node drží (nepovinné); je-li starší, Worker pošle `directory`. Interval určuje profil (`heartbeat_interval_s`).
+`sig` = Ed25519 přes doménu `ancord/v1/heartbeat` a `payload = kanonické JSON zprávy bez pole sig`. `seq` musí striktně růst v rámci jednoho spojení (po připojení Worker čítač vynuluje, první heartbeat může mít `seq = 0`), `|now − ts| ≤ 60 s`. `epoch` je poslední adresář, který node drží (nepovinné). Je-li starší, nebo chybí (node po startu žádný nedrží), Worker pošle `directory`. Interval určuje profil (`heartbeat_interval_s`).
 
 ## 6. Adresář a epochy
 
@@ -203,7 +203,7 @@ Klient se připojí na `wss://<hostname>/client` (WebSocket, textové JSON zprá
 1. Node hned po upgradu pošle `{"t":"hello","node_id":"<node_id>","challenge":"<b64u 32 B>"}`; `challenge` je náhodná a platí jen pro toto spojení.
 2. Klient do `auth_timeout_s` (výchozí 10 s) odpoví `{"t":"auth","ticket":"<ticket>","sig":"<b64u>"}`, kde `sig` je Ed25519 klíčem `ek` přes doménu `ancord/v1/client-auth` a `payload = challenge(32 B) ‖ node_id(UTF-8)`. Ticket sám bez `ek` tedy nestačí, ukradený ticket je bez soukromého klíče k ničemu.
 3. Node ověří ticket (§8: podpis Workeru, `nid`, `exp`), podpis proti `ek` z ticketu a že `n` nebyl použit (jednorázové do `exp`). Při úspěchu odpoví `{"t":"ready"}`, jinak `{"t":"error","reason":"…"}` a zavře spojení kódem `4401`. Bez `auth` do limitu se zavře kódem `4408`.
-4. Po `ready` node odpovídá na `{"t":"ping"}` zprávou `{"t":"pong"}`. Další zprávy data plane definuje fáze B3.
+4. Po `ready` node odpovídá na `{"t":"ping"}` zprávou `{"t":"pong"}`. Zprávy data plane (`send`, `fetch`, `ack`) jsou v §13.
 
 Volba nodů: viz `worker/` (power-of-two-choices nad váženým výběrem filtrovaným podle vzdálenosti klienta z `request.cf`). Klienti na pořadí nemají spoléhat nad rámec „první je preferovaný“.
 
@@ -260,4 +260,72 @@ Podepsaný request (§3) anchoru, tělo `{"push_id":"…","mailbox_id":"<b64u 32
 Hodnoty parametrů (R, kvorum, epocha, intervaly, hashcash, limity ASN, parametry challenge) jsou v profilech `dev`/`prod`/`open` (`worker/src/config.ts`), ne v protokolu. Protokol je přenáší jen v adresáři (`params`) a ve výzvách.
 
 ## 12. Testovací vektory
-`test-vectors/*.json` obsahují deterministické vstupy a očekávané výstupy pro: `node_id` a hostname, kanonické JSON, podpis registrace a důkazu, hashcash, podepsaný request, heartbeat, adresář, ticket, HRW, hash-chain, Merkle/space, push registraci. Obě implementace musí projít všechny.
+`test-vectors/*.json` obsahují deterministické vstupy a očekávané výstupy pro: `node_id` a hostname, kanonické JSON, podpis registrace a důkazu, hashcash, podepsaný request, heartbeat, adresář, ticket, HRW, hash-chain, Merkle/space, push registraci, mailbox a ratchet (§13). Obě implementace musí projít všechny.
+
+## 13. Data plane
+
+Node je slepá schránka: ukládá jen ciphertext pod `mailbox_id` a nezná odesílatele ani příjemce. Šifrování je čistě mezi klienty, node ratchet nikdy nepočítá. Dohoda sdíleného tajemství mezi klienty (párování) je mimo rozsah.
+
+### 13.1 Mailbox a zpráva
+- Klienti sdílejí tajemství `ss` (32 B). Každý směr má vlastní mailbox, takže do každého píše jediný odesílatel: `dir ∈ {"i2r","r2i"}` (initiator → responder, opačně).
+- `mailbox_id(dir) = sha256("ancord/v1/mailbox" ‖ 0x00 ‖ ss ‖ 0x00 ‖ dir)` (32 B, v JSON b64u).
+- Zpráva: `id` (16 B náhodných, generuje klient, b64u), `ts` (sekundy klienta, jen k řazení; musí být v rozmezí ±86 400 s od času nodu), `ct` (b64u, po dekódování nejvýše 32 KiB). `(mailbox_id, id)` identifikuje zprávu; opakovaný zápis téhož `id` nic nemění (idempotence).
+
+### 13.2 Ratchet (klient ↔ klient)
+Jednosměrný symetrický řetěz na každý mailbox. HKDF je HKDF-SHA256 (RFC 5869), AEAD ChaCha20-Poly1305 (RFC 8439).
+
+```
+ck_0     = HKDF(ikm = ss, salt = "ancord/v1/ratchet", info = "chain" ‖ 0x00 ‖ dir, L = 32)
+mk_n     = HKDF(ikm = ck_n, salt = (prázdná), info = "ancord/v1/ratchet/msg", L = 44)   key = mk_n[0..32], nonce = mk_n[32..44]
+ck_{n+1} = HKDF(ikm = ck_n, salt = (prázdná), info = "ancord/v1/ratchet/chain", L = 32)
+```
+Prázdná sůl znamená `HashLen` nul (RFC 5869 §2.2). Zpráva s pořadovým číslem `n` (u32, od 0):
+
+```
+aad = "ancord/v1/msg" ‖ 0x00 ‖ mailbox_id(32 B) ‖ id(16 B) ‖ n_be_u32
+ct  = b64u( n_be_u32 ‖ ChaCha20-Poly1305(key, nonce, aad, plaintext) )      // šifrový text vč. 16 B tagu
+```
+Klíč i nonce jsou pro každé `n` jiné, takže se nonce nikdy neopakuje s týmž klíčem. Po použití se `ck_n` zahodí (forward secrecy v rámci řetězu). Příjemce drží `(ck, next_n, skipped)`: zpráva s `n = next_n` posune řetěz, `n > next_n` uloží klíče přeskočených zpráv (nejvýše `max_skip = 200` najednou, větší mezera se odmítne jako desync), `n < next_n` použije a smaže uložený přeskočený klíč, jinak se odmítne. Stav se mění až po úspěšném ověření tagu.
+
+### 13.3 Zprávy klient → node
+Po `ready` (§8.1). Každý požadavek může nést `rid` (řetězec do 64 znaků), který odpověď zopakuje. Chyba má tvar `{"t":"error","rid":…,"code":"<kód>","reason":"<text>"}`; spojení po ní zůstává.
+
+| Požadavek | Úspěch | Význam |
+|---|---|---|
+| `{"t":"send","id","mailbox_id","ts","ct","push_id"?}` | `{"t":"sent","id","acks":n}` | zápis na `r` anchorů, hotovo po `quorum` potvrzeních; volitelné `push_id` příjemce (§10.1) spustí wake (§13.6) |
+| `{"t":"fetch","mailbox_id","limit"}` | `{"t":"messages","mailbox_id","messages":[{"id","ts","ct"}]}` | nedoručené zprávy seřazené podle `(ts, id)` (`ts` má sekundovou přesnost, přesné pořadí určuje číslo `n` v ratchetu, podle něj zprávy řadí klient); `limit` 1–500 (výchozí 100) |
+| `{"t":"ack","mailbox_id","ids":[…]}` | `{"t":"acked","n":k}` | zprávy (nejvýše 500) jsou doručené a anchory je smažou; `n` je počet `ids` v požadavku |
+
+Kódy chyb: `bad_request`, `too_large`, `rate_limited` (limit zpráv na spojení), `no_directory` (node ještě nemá adresář), `insufficient_nodes` (adresář má méně nodů než `quorum`), `quorum_unavailable` (anchory neodpověděly v dostatečném počtu), `mailbox_full`.
+
+- **Anchory** zpracuje node z adresáře své aktuální epochy (§7) s `r` a `quorum` z `params`. Pokud je sám anchorem, zapisuje do vlastního úložiště, jinak volá ostatní (§13.4). Odesílá všem `r` anchorům současně a odpoví, jakmile má `quorum` potvrzení; zbylé zápisy dobíhají na pozadí.
+- **`fetch`** se dotáže všech anchorů a skončí, jakmile odpoví aspoň `r − quorum + 1` z nich (takové čtení se vždy protne s jakýmkoli zápisem na kvorum). Výsledek je sjednocení podle `id`. Méně odpovědí je `quorum_unavailable`.
+- **`ack`** jde na všechny anchory a uspěje při `quorum` potvrzeních. Je idempotentní.
+
+### 13.4 Node ↔ node
+`POST /n/put`, `/n/get`, `/n/ack` na `https://<hostname>` cílového nodu, tělo JSON (nejvýše 128 KiB), podepsaný request podle §3. Příjemce odmítne:
+- `401` neplatný podpis, `409` replay (nonce okno jako §3),
+- `403` volající není v adresáři aktuální ani předchozí epochy, nebo příjemce není anchorem `mailbox_id` v aktuální ani předchozí epoše,
+- `413` příliš velké tělo, `400` neplatné tělo.
+
+O jednu epochu napřed bývá odesílatel jen na několik vteřin, příjemce adresář ještě neobdržel a `403` je dočasné. Odesílatel proto `403` zopakuje dvakrát s prodlevou 400 ms (s novým nonce), než ho vyhodnotí jako chybu.
+
+| Cesta | Tělo | Odpověď `200` |
+|---|---|---|
+| `/n/put` | `{"mailbox_id","id","ts","exp","ct","push_id"?}` nebo `{"mailbox_id","id","ts","exp","delivered":true}` (náhrobek, bez `ct`) | `{"status":"stored"\|"duplicate"}` |
+| `/n/get` | `{"mailbox_id","limit"}` | `{"messages":[{"id","ts","exp","ct"}]}` |
+| `/n/ack` | `{"mailbox_id","ids":[…]}` | `{"n":k}` (počet změněných záznamů) |
+
+`put` s existujícím `(mailbox_id, id)` vrací `duplicate` a nemění nic, jen `delivered: true` převede pending záznam na doručený (delivered vyhrává vždy). `ack` vyrobí z neexistující zprávy záznam „doručeno“, takže pozdní `put` zprávu neoživí. Plný mailbox odpoví `507 mailbox_full`.
+
+### 13.5 Úložiště, TTL, handoff
+- Záznam je `pending` (nese `ct`) nebo `delivered` (jen náhrobek bez `ct`). Oba mají `exp`; po `exp` je smaže úklid. Příjemce si `exp` omezí na `now + message_ttl_s` (výchozí 30 dní), takže handoff ani opakovaný zápis životnost neprodlužují.
+- Strop nedoručených zpráv v jednom mailboxu na nodu je `max_mailbox_messages` (výchozí 10 000).
+- **Handoff**: po přijetí adresáře nové epochy projde node svá uložená data. Pro každý mailbox spočte anchory nové epochy a každý záznam (i náhrobek) pošle `put` všem z nich kromě sebe. Pokud sám už anchorem není a záznam přijalo aspoň `quorum` nových anchorů, smaže ho. Neúspěšné pokusy se opakují při dalším průchodu údržby, dokud se neuspěje; po dobu, co by nové anchory ještě neznaly novou epochu, je příjemce přijme díky pravidlu o předchozí epoše.
+- Pod `quorum` nodů v adresáři se zápisy odmítají (`insufficient_nodes`), jiný degradovaný režim není.
+
+### 13.6 Wake (push)
+- `push_id` je 52 znaků `[a-z2-7]` (§10.1). Odesílatel ho zná, protože ho odvodí ze sdíleného tajemství mailboxu; koordinující node ho přidá do `/n/put` všem anchorům. Neplatný tvar se odmítne (`bad_request`). `push_id` se neukládá.
+- Anchor, který zprávu **nově uložil** (`stored`, ne `duplicate`, ne náhrobek) a dostal `push_id`, na pozadí pošle Workeru podepsaný `POST /wake` (§10.2) s `{push_id, mailbox_id}`. Odpověď Workeru se na zápis zprávy nijak nepromítá: selhání wake nikdy neshodí `send`.
+- Anchor koaleskuje i sám: pro stejný `push_id` pošle nejvýše jeden wake za `wake_min_interval_s` (výchozí 10 s). Worker koaleskuje znovu (per `push_id`) a limituje per node, takže až `r` souběžných wake od anchorů téže zprávy skončí nejvýš jednou jako push.
+- Průběžné doručování online odběrateli (a tedy vynechání wake, když je odběratel online) tu zatím není: klient čte `fetch`. Wake se proto posílá vždy.

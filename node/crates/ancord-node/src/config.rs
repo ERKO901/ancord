@@ -55,6 +55,38 @@ pub struct Config {
     /// Strop počtu listů Proof of Space, které node ochotně vytvoří (ochrana před přehnanou výzvou).
     #[arg(long, env = "MAX_SPACE_LEAVES", default_value_t = 1 << 27)]
     pub max_space_leaves: u64,
+
+    /// Šablona adresy jiného nodu pro node↔node requesty; `{host}` se nahradí hostname z adresáře.
+    #[arg(long, env = "PEER_URL_TEMPLATE", default_value = "https://{host}")]
+    pub peer_url_template: String,
+
+    /// Timeout jednoho node↔node requestu.
+    #[arg(long, env = "PEER_TIMEOUT_S", default_value_t = 5)]
+    pub peer_timeout_s: u64,
+
+    /// Jak dlouho se uchovává zpráva, která nebyla doručena (spec §13.5).
+    #[arg(long, env = "MESSAGE_TTL_S", default_value_t = 30 * 24 * 3600)]
+    pub message_ttl_s: u64,
+
+    /// Strop nedoručených zpráv v jednom mailboxu na tomto nodu.
+    #[arg(long, env = "MAX_MAILBOX_MESSAGES", default_value_t = 10_000)]
+    pub max_mailbox_messages: u64,
+
+    /// Kolik zpráv za sekundu smí poslat jedno spojení klienta (okamžitá dávka je dvojnásobek).
+    #[arg(long, env = "CLIENT_MSG_RATE", default_value_t = 20)]
+    pub client_msg_rate: u64,
+
+    /// Nejkratší odstup mezi dvěma wake téhož `push_id` z tohoto nodu (spec §13.6).
+    #[arg(long, env = "WAKE_MIN_INTERVAL_S", default_value_t = 10)]
+    pub wake_min_interval_s: u64,
+
+    /// Jak často údržba kontroluje, zda je potřeba handoff po změně epochy.
+    #[arg(long, env = "MAINTENANCE_INTERVAL_S", default_value_t = 30)]
+    pub maintenance_interval_s: u64,
+
+    /// Jak často se uklízí vypršené zprávy.
+    #[arg(long, env = "JANITOR_INTERVAL_S", default_value_t = 3600)]
+    pub janitor_interval_s: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]

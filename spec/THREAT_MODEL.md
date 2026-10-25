@@ -1,6 +1,6 @@
 # ancord – model hrozeb
 
-Doplněk k `ARCHITECTURE.md` §8. Popisuje, co Worker (control plane) chrání, před kým a kde končí záruky. Stav odpovídá implementaci ve `worker/`.
+Doplněk k `ARCHITECTURE.md` §8. Popisuje, co Worker (control plane) chrání, před kým a kde končí záruky. Stav odpovídá implementaci ve `worker/` (sekce 1 až 5) a `node/` (sekce 6).
 
 ## 1. Aktiva a hranice důvěry
 
@@ -42,3 +42,17 @@ Hostitel instance (např. na Flux) může vidět privátní klíč nodu. U vlast
 
 ## 5. Mimo rozsah
 Mobilní klient, UI, tokenová ekonomika. Ochrana metadat před Cloudflarem (ten vidí IP a časování, ne obsah) je akceptované riziko celého návrhu.
+
+## 6. Data plane (node)
+
+Operátor anchoru vidí: `mailbox_id` (hash sdíleného tajemství, nespojitelný s identitou), velikost a čas zápisu a čtení, IP nejsou vidět (Cloudflare). Obsah vidí jen jako ciphertext.
+
+| Hrozba | Obrana v implementaci | Zbytkové riziko |
+|---|---|---|
+| Čtení zpráv anchorem | E2E: ChaCha20-Poly1305, klíč na každou zprávu z jednosměrného HKDF řetězu, AAD váže ciphertext na `mailbox_id` a `id` zprávy | operátor vidí metadata (časování, velikost, počet zpráv v mailboxu) |
+| Podvržení nebo přehrání zprávy nodem | AEAD tag, stav ratchetu se mění až po ověření tagu, použitý klíč se zahodí; přehraná zpráva (`n < next_n` bez uloženého klíče) se odmítne | node může zprávu zadržet nebo smazat (dostupnost řeší replikace R=3 s kvorem 2) |
+| Znovupoužití nonce | nonce i klíč jsou odvozeny z řetězu a unikátní pro každé `n`; klient musí stav uložit **před** odesláním (CLI to dělá) | klient, který stav ratchetu vrátí zpět (záloha, klon zařízení), znovu použije `n` s jiným obsahem; to ratchet sám nezachytí |
+| Zahlcení mailboxu | zápis vyžaduje znalost `mailbox_id` (odvozeného z tajemství), strop nedoručených zpráv v mailboxu, limit zpráv na spojení, limit velikosti, ticket je jednorázový a vázaný na efemérní klíč | kdo zná `mailbox_id`, ho může zaplnit až po strop; `mailbox_id` v kódu zná jen dvojice klientů a anchory |
+| Falešný anchor nebo podvržený node↔node request | každý request podepsán identitou nodu a ověřen proti adresáři Workeru (aktuální nebo předchozí epocha), nonce proti replayi, příjemce zapisuje a vydává jen mailboxy, pro které je sám anchorem | škodlivý anchor smí číst a mazat mailboxy, jejichž je anchorem (kvorum čtení ho přehlasuje jen částečně, protože čtení sjednocuje) |
+| Oživení doručené zprávy | doručení se zapisuje jako náhrobek až do vypršení, `delivered` vyhrává při `put` i handoffu | ack, který nedorazil na žádný z anchorů, zprávu doručí podruhé; klient je odolný díky ratchetu (stejné `n` už nejde otevřít) |
+| Ztráta dat při změně epochy | handoff nových anchorů před smazáním (potvrzení aspoň `quorum`), příjemci přijímají zápis i podle předchozí epochy | uzel, který ve chvíli změny epochy padne před dokončením handoffu, nechá data na ostatních dvou kopiích; přežití dvou současných výpadků není garantováno |

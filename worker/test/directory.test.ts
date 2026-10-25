@@ -1,8 +1,10 @@
+import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { canonicalBytes } from "../src/canonical";
 import { DOMAIN, verifySig } from "../src/crypto";
 import { b64uDecodeLen } from "../src/encoding";
 import { FAST, alignToEpoch, bringUp, exports, newNode, registryStub, setTimeOffset, setup, sqlOf, tick, withRegistry } from "./support/helpers";
+import { KV_DIRECTORY, kvDirectoryKey } from "../src/registry/snapshot";
 import { BASE, TestNode } from "./support/node";
 
 const EPOCH_S = 60; // dev profil
@@ -180,9 +182,11 @@ describe("adresář a epochy (A2)", () => {
     expect(await directoryValid(d2)).toBe(true);
 
     // c se vrátí a v následující epoše je zpět
+    // (heartbeat bez epochy by adresář sestavil hned, proto všichni tři ožijí ještě v předchozí epoše)
+    await setTimeOffset(testOffset(epoch + 1, 55));
     await c.connect();
-    await setTimeOffset(testOffset(epoch + 2, 3));
     for (const n of [a, b, c]) await n.heartbeat();
+    await setTimeOffset(testOffset(epoch + 2, 3));
     await tick();
     const d3 = (await exports.default.fetch(`${BASE}/directory`).then((r) => r.json())) as any;
     expect(d3.body.epoch).toBe(epoch + 2);
@@ -199,6 +203,29 @@ describe("adresář a epochy (A2)", () => {
     expect(ack.epoch).toBe(epoch + 1);
     const d = await n.waitFor((m) => m.t === "directory");
     expect(d.directory.body.epoch).toBe(epoch + 1);
+  });
+
+  it("heartbeat bez epochy (čerstvý start nodu) dostane aktuální adresář", async () => {
+    const epoch = await alignToEpoch(EPOCH_S, 5);
+    const n = await up();
+    await tick();
+    await n.waitFor((m) => m.t === "directory");
+    n.inbox.length = 0;
+    await n.heartbeat();
+    const d = await n.waitFor((m) => m.t === "directory");
+    expect(d.directory.body.epoch).toBe(epoch);
+  });
+
+  it("adresář, který vznikl při heartbeatu dřív než tick, se publikuje do KV", async () => {
+    const epoch = await alignToEpoch(EPOCH_S, 5);
+    const n = await up();
+    await n.heartbeat();
+    await n.waitFor((m) => m.t === "directory");
+    // žádný tick: adresář vytvořil heartbeat, a přesto ho musí najít `/wake` i `/directory` přes KV
+    const stored = await env.ROUTING_KV.get<any>(kvDirectoryKey(epoch), "json");
+    expect(stored?.body.epoch).toBe(epoch);
+    expect(stored.body.nodes.map((x: any) => x.id)).toEqual([n.nodeId]);
+    expect((await env.ROUTING_KV.get<any>(KV_DIRECTORY, "json"))?.body.epoch).toBe(epoch);
   });
 
   it("do adresáře nepatří zabanované ani neaktivní nody; genesis a probation výjimka", async () => {

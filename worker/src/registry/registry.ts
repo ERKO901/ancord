@@ -22,7 +22,7 @@ import {
   type ConfirmResult,
 } from "./registration";
 import { broadcastDirectory, ensureDirectory, type SignedDirectory } from "./directory";
-import { KV_DIRECTORY, kvDirectoryKey, publishSnapshot } from "./snapshot";
+import { publishDirectory, publishSnapshot } from "./snapshot";
 import { scoreOf, isLive } from "./scoring";
 import { all, migrate, one, type NodeRow } from "./store";
 import { handleMessage, onConnect, type CfInfo } from "./ws";
@@ -114,7 +114,7 @@ export class Registry extends DurableObject<Env> {
   async getDirectory(): Promise<Result<SignedDirectory>> {
     return toResult(async () => {
       const { directory, created } = await ensureDirectory(this.rc);
-      if (created) await this.publishDirectory(directory);
+      if (created) await publishDirectory(this.env, directory);
       return directory;
     });
   }
@@ -257,7 +257,7 @@ export class Registry extends DurableObject<Env> {
           const { directory, created } = await ensureDirectory(this.rc);
           if (created) {
             broadcastDirectory(this.rc, directory);
-            await this.publishDirectory(directory);
+            await publishDirectory(this.env, directory);
           }
         },
       ],
@@ -276,14 +276,6 @@ export class Registry extends DurableObject<Env> {
 
   override async alarm(): Promise<void> {
     await this.tick();
-  }
-
-  private async publishDirectory(directory: SignedDirectory): Promise<void> {
-    const json = JSON.stringify(directory);
-    await Promise.all([
-      this.env.ROUTING_KV.put(KV_DIRECTORY, json, { expirationTtl: 3600 }),
-      this.env.ROUTING_KV.put(kvDirectoryKey(directory.body.epoch), json, { expirationTtl: 3600 }),
-    ]);
   }
 
   private async ensureAlarm(): Promise<void> {

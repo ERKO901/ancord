@@ -7,7 +7,7 @@ use ancord_node::error::NodeError;
 use ancord_node::identity::Identity;
 use ancord_node::state::NodeState;
 use ancord_node::worker::WorkerClient;
-use ancord_node::{server, supervisor};
+use ancord_node::{maintenance, server, supervisor};
 use clap::Parser;
 
 #[tokio::main]
@@ -46,16 +46,19 @@ async fn run() -> Result<(), NodeError> {
     tracing::info!(node_id = identity.node_id(), pubkey = %identity.pubkey_b64(), "identity loaded");
     let worker = WorkerClient::new(&cfg.worker_url)?;
     let worker_key = resolve_worker_key(&cfg, &worker).await?;
-    let state = NodeState::new(cfg.clone(), identity, worker_key);
+    let state = NodeState::new(cfg.clone(), identity, worker_key)?;
 
     let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
     tracing::info!(listen = %cfg.listen, node = %cfg.node_name, "http server up");
     let app = server::router(state.clone());
     let server = tokio::spawn(async move { axum::serve(listener, app).await });
 
+    let upkeep = tokio::spawn(maintenance::run(state.clone()));
+
     tokio::select! {
         r = supervisor::run(state, worker) => r,
         r = server => Err(NodeError(format!("http server stopped: {r:?}"))),
+        r = upkeep => Err(NodeError(format!("maintenance stopped: {r:?}"))),
         _ = tokio::signal::ctrl_c() => { tracing::info!("shutting down"); Ok(()) }
     }
 }

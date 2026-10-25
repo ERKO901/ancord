@@ -183,7 +183,7 @@ Anchory zůstávají. Mění se zdroj členství:
 5. Zda gateway/Tunnel provoz zprávové aplikace vyhovuje podmínkám Cloudflare.
 6. Multi-signer adresář: kdy a jak.
 7. Chování při split-brain (nody se nevidí, ale vidí Worker) a expirace adresáře při dlouhém výpadku Workeru.
-8. Konfliktní model mailboxu při zápisu s kvorem 2: idempotentní zápis podle ID zprávy, pořadí, duplicity.
+8. ~~Konfliktní model mailboxu při zápisu s kvorem 2~~ vyřešeno v B3: zápis je idempotentní podle `(mailbox_id, id)`, doručení je náhrobek a „doručeno“ vyhrává, pořadí je podle `(ts, id)`, čtení sjednocuje odpovědi `r − quorum + 1` anchorů (`spec/PROTOCOL.md` §13).
 9. Perzistence klíče a dat nodu na Flux (instance se může přesunout na jiný stroj; ztráta klíče znamená nový `node_id` a ztrátu anchorů).
 10. Velikost sítě nad stovky nodů: shardování registru (DO) a frekvence epoch. Pro 3–20 nodů se neřeší.
 
@@ -275,7 +275,7 @@ Vývoj běží na firemní zóně **`melonet.cz`** (sdílená zóna s existujíc
 
 **Stav (fáze A):** A1–A5 jsou implementovány v `worker/` a splňují kritéria přijetí v testech (vitest + Miniflare, `npm test` v `worker/`), včetně sdílených vektorů v `spec/test-vectors/`. Nic není nasazeno.
 
-**Stav (fáze B):** B1 a B2 jsou implementovány v `node/` a splňují kritéria přijetí v integračním testu `node/crates/ancord-node/tests/e2e.rs` (tři nody proti lokálně spuštěnému Workeru v `wrangler dev`, mock Cloudflare, bez tunelu) a ve sdílených vektorech. B3 a B4 zatím ne. Nic není nasazeno.
+**Stav (fáze B):** B1 až B4 jsou implementovány v `node/` a splňují kritéria přijetí v integračním testu `node/crates/ancord-node/tests/e2e.rs` (tři nody proti lokálně spuštěnému Workeru v `wrangler dev`, mock Cloudflare, bez tunelu), v `tests/dataplane.rs` (kvorum, výpadky, autorizace node↔node, handoff, wake proti falešnému Workeru, bez skutečného Workeru) a ve sdílených vektorech (včetně HRW a ratchetu). Data plane je v `spec/PROTOCOL.md` §13, wake v §13.6. Klient zatím mailbox čte dotazem `fetch`; průběžné doručování online odběrateli zatím není, proto anchor wake posílá vždy (§13.6). Odvození push klíče z mailbox tajemství na straně klienta je mimo rozsah (mobilní klient), CLI jen umí poslat zadané `push_id`. Nic není nasazeno.
 
 **Deploy a DNS se zatím neřeší.** Nejdřív se napíše a lokálně otestuje kód, nasazení na Cloudflare a Docker prostředí přijdou až ve fázi C. Fáze A a B nic nevytvářejí v Cloudflare a nepotřebují DNS ani `.env`.
 

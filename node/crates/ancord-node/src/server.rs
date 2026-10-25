@@ -1,5 +1,5 @@
 //! HTTP server nodu (cíl ingressu tunelu): důkaz hostname pro Worker a zdroj dat pro peer witness.
-//! Admission klientů (B2) přibude ve stejném routeru.
+//! Ve stejném routeru je admission klientů (`/client`) a node↔node API anchoru (`/n/*`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -28,6 +28,7 @@ pub fn router(state: Arc<NodeState>) -> Router {
         .route(PROOF_PATH, get(proof))
         .route(BW_PATH, get(bandwidth_source))
         .route("/client", get(crate::client::upgrade))
+        .merge(crate::peer::routes())
         .route("/health", get(|| async { Json(json!({"ok": true})) }))
         .with_state(state)
 }

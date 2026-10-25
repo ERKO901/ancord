@@ -1,0 +1,81 @@
+{
+  "description": "Mailbox a ratchet (spec §13.1 a §13.2): HKDF-SHA256 + ChaCha20-Poly1305, vygenerováno přes node:crypto",
+  "shared_secret": "owj9hzAMHK58VGNijUirZ7pPPhgkMo43FjN4QYik5xI",
+  "max_skip": 200,
+  "dirs": [
+    {
+      "dir": "i2r",
+      "mailbox_id": "EuJl4PgH1lb1AbMPRAt4PaXocNZNSyuuIxoipVSvgDg",
+      "chain_key_0_hex": "0e33a4603cca412bb6ffc8d0fdcb71cce923ba8191260fb1ba0ceda52145dad5",
+      "messages": [
+        {
+          "n": 0,
+          "id": "aQ8vt9onnoOzjOPbHqJ76g",
+          "plaintext_b64": "YWhvag",
+          "key_hex": "55be6f581bb6c1ffedbf7634a81aaab3166867bbe0dbdce841a610e89d36b61e",
+          "nonce_hex": "76eec9189a67b5253e57f275",
+          "aad_hex": "616e636f72642f76312f6d73670012e265e0f807d656f501b30f440b783da5e870d64d4b2bae231a22a554af8038690f2fb7da279e83b38ce3db1ea27bea00000000",
+          "ct": "AAAAAHFZvkDSnAjGrLsvS_zFpjNPD2Gs",
+          "next_chain_key_hex": "d69b7edf09835dd6c3d3268628038ed80026b75e4e25907882c538022ff5d3f4"
+        },
+        {
+          "n": 1,
+          "id": "J-2tCdS1MmV8nymVgWxwdw",
+          "plaintext_b64": "",
+          "key_hex": "f30bd88cbb8c886afb9e2ebef8143c52c6c7c37473dae581d44d523d714dd772",
+          "nonce_hex": "8450891f3e7b32a804a9b08b",
+          "aad_hex": "616e636f72642f76312f6d73670012e265e0f807d656f501b30f440b783da5e870d64d4b2bae231a22a554af803827edad09d4b532657c9f2995816c707700000001",
+          "ct": "AAAAAXZC36BFTKQqwwYn1knWabM",
+          "next_chain_key_hex": "1eae390b57878bfd080b9709650edb10a0537f5c02092ee07762756a508ff9cf"
+        },
+        {
+          "n": 2,
+          "id": "U-Ij7TmojWVMqrjCbBmQ9A",
+          "plaintext_b64": "enByw6F2YSDEjS4gMyDwn5SS",
+          "key_hex": "d5372e6c5b9f2e1de5b8cf729f7d800733d4c99c410fe079afaba36f9589c636",
+          "nonce_hex": "1e01b54a603750aa6b8ce447",
+          "aad_hex": "616e636f72642f76312f6d73670012e265e0f807d656f501b30f440b783da5e870d64d4b2bae231a22a554af803853e223ed39a88d654caab8c26c1990f400000002",
+          "ct": "AAAAAuxvrcMUGNO61QJKsTny87Bw9YbVn1QAHH3USd2DmQrwRWQ",
+          "next_chain_key_hex": "1b96800136ef8f170ef636978dafb2faaf1c2be4ab86ccf6708d282d364efce0"
+        }
+      ]
+    },
+    {
+      "dir": "r2i",
+      "mailbox_id": "CdW_N7aQOha__TXHdzt3s_XrMM50bbLZjjRG1SzgJpA",
+      "chain_key_0_hex": "89a72921e79a128576690702220d8733368348bc93520d5095abb3170804947b",
+      "messages": [
+        {
+          "n": 0,
+          "id": "ik8CBjKp7VpZzPrdZJuF3A",
+          "plaintext_b64": "YWhvag",
+          "key_hex": "480c2712403807dbcc948ee96ce9a5e366fc213806377330c14ddbef824b7d0e",
+          "nonce_hex": "9f7bce6fa8141c561a582ff7",
+          "aad_hex": "616e636f72642f76312f6d73670009d5bf37b6903a16bffd35c7773b77b3f5eb30ce746db2d98e3446d52ce026908a4f020632a9ed5a59ccfadd649b85dc00000000",
+          "ct": "AAAAAIQqaIAW4FVy-MFYP2uh1oUFcxJY",
+          "next_chain_key_hex": "81dc2b53a4f9fea05ced1d256e607aa6917efa6359303b90d54c8acada68efae"
+        },
+        {
+          "n": 1,
+          "id": "Ob69yaIeAYDGzjbK4Vq6DQ",
+          "plaintext_b64": "",
+          "key_hex": "a53823e0e04954f82dbf78301b711d02999686de06f9a4e4fd9631071354433b",
+          "nonce_hex": "7c0d4d0324d05cd3eb4f423c",
+          "aad_hex": "616e636f72642f76312f6d73670009d5bf37b6903a16bffd35c7773b77b3f5eb30ce746db2d98e3446d52ce0269039bebdc9a21e0180c6ce36cae15aba0d00000001",
+          "ct": "AAAAAZnZ0xdPpBwehQ8NBYgU5jY",
+          "next_chain_key_hex": "16d56f89519ba443aeba3fbada455875cc6bcd33e848fbd01981d6017fba1d4a"
+        },
+        {
+          "n": 2,
+          "id": "a5O3kODTV9Yf5HKkZkLQww",
+          "plaintext_b64": "enByw6F2YSDEjS4gMyDwn5SS",
+          "key_hex": "08e38dc204d0672efd083d6983c51d0ecbe280f31a32a5dc7be4cc8636b1fb73",
+          "nonce_hex": "3c1cad4d3ab43544efa31b2e",
+          "aad_hex": "616e636f72642f76312f6d73670009d5bf37b6903a16bffd35c7773b77b3f5eb30ce746db2d98e3446d52ce026906b93b790e0d357d61fe472a46642d0c300000002",
+          "ct": "AAAAAuu-j8S-C-snY3ez0dsQLnKY_Q6kXqzZiJgfAYHUnuuCYFY",
+          "next_chain_key_hex": "5fadcb3359c9b04b803ef30772499593f545ecb7dc21fb43b4d955645b8eaa67"
+        }
+      ]
+    }
+  ]
+}

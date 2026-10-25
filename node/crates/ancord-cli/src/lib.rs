@@ -3,10 +3,12 @@
 use std::time::Duration;
 
 use ancord_node::encoding::{b64u_decode_array, b64u_encode};
+use ancord_node::ratchet::{Direction, Receiver, Sender};
 use ancord_node::sign::{sign, DOMAIN_CLIENT_AUTH};
 use ed25519_dalek::SigningKey;
 use futures_util::{SinkExt, StreamExt};
-use serde::Deserialize;
+use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
@@ -22,6 +24,12 @@ pub enum CliError {
     Admission { node: String, reason: String },
     #[error("no node accepted the connection: {0}")]
     AllFailed(String),
+    #[error("node refused the request ({code}): {reason}")]
+    Node { code: String, reason: String },
+    #[error("connection: {0}")]
+    Connection(String),
+    #[error("session file: {0}")]
+    Session(String),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -108,4 +116,165 @@ pub async fn connect_any(route: &Route, ek: &SigningKey, url_for: impl Fn(&str) 
 
 pub fn default_url(hostname: &str) -> String {
     format!("wss://{hostname}/client")
+}
+
+/// Jeden požadavek a odpověď na již přijatém spojení (spec §13.3). Odpověď se páruje podle `rid`.
+pub async fn rpc(ws: &mut NodeSocket, mut request: Value) -> Result<Value, CliError> {
+    let mut raw = [0u8; 8];
+    rand::rngs::OsRng.fill_bytes(&mut raw);
+    let rid = b64u_encode(&raw);
+    request["rid"] = json!(rid);
+    ws.send(Message::text(request.to_string())).await.map_err(|e| CliError::Connection(e.to_string()))?;
+    let wait = Duration::from_secs(30);
+    loop {
+        let frame = tokio::time::timeout(wait, ws.next())
+            .await
+            .map_err(|_| CliError::Connection("timeout".into()))?
+            .ok_or_else(|| CliError::Connection("connection closed".into()))?
+            .map_err(|e| CliError::Connection(e.to_string()))?;
+        let Message::Text(text) = frame else {
+            if matches!(frame, Message::Close(_)) {
+                return Err(CliError::Connection("connection closed".into()));
+            }
+            continue;
+        };
+        let reply: Value = serde_json::from_str(text.as_str()).map_err(|e| CliError::Connection(e.to_string()))?;
+        if reply["rid"] != rid.as_str() {
+            continue;
+        }
+        if reply["t"] == "error" {
+            return Err(CliError::Node {
+                code: reply["code"].as_str().unwrap_or("error").to_owned(),
+                reason: reply["reason"].as_str().unwrap_or("").to_owned(),
+            });
+        }
+        return Ok(reply);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Role {
+    Initiator,
+    Responder,
+}
+
+impl Role {
+    fn sending(self) -> Direction {
+        match self {
+            Self::Initiator => Direction::InitiatorToResponder,
+            Self::Responder => Direction::ResponderToInitiator,
+        }
+    }
+}
+
+/// Stav konverzace jedné dvojice: sdílené tajemství a oba ratchety. Ukládá se do souboru.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Session {
+    pub secret: [u8; 32],
+    pub role: Role,
+    tx: Sender,
+    rx: Receiver,
+}
+
+/// Zpráva zašifrovaná a připravená k odeslání. Opakované odeslání téhož objektu je idempotentní.
+#[derive(Debug, Clone)]
+pub struct Prepared {
+    pub id: [u8; 16],
+    pub mailbox_id: [u8; 32],
+    pub ct: String,
+}
+
+#[derive(Debug, Default)]
+pub struct Received {
+    pub messages: Vec<Vec<u8>>,
+    /// Zprávy, které se nepodařilo dešifrovat (podvržené, přehrané, desync). Zůstanou v mailboxu do vypršení.
+    pub rejected: usize,
+}
+
+impl Session {
+    pub fn new(secret: [u8; 32], role: Role) -> Self {
+        Self {
+            secret,
+            role,
+            tx: Sender::new(&secret, role.sending()),
+            rx: Receiver::new(&secret, role.sending().opposite()),
+        }
+    }
+
+    pub fn load(path: &std::path::Path) -> Result<Self, CliError> {
+        let text = std::fs::read_to_string(path).map_err(|e| CliError::Session(format!("{}: {e}", path.display())))?;
+        serde_json::from_str(&text).map_err(|e| CliError::Session(format!("{}: {e}", path.display())))
+    }
+
+    /// Zapíše soubor s právy 0600 (obsahuje klíče).
+    pub fn save(&self, path: &std::path::Path) -> Result<(), CliError> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let text = serde_json::to_string_pretty(self).map_err(|e| CliError::Session(e.to_string()))?;
+        let tmp = path.with_extension("tmp");
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(|e| CliError::Session(format!("{}: {e}", tmp.display())))?;
+        file.write_all(text.as_bytes()).map_err(|e| CliError::Session(e.to_string()))?;
+        std::fs::rename(&tmp, path).map_err(|e| CliError::Session(format!("{}: {e}", path.display())))
+    }
+
+    /// Zašifruje zprávu a posune řetěz. Stav je nutné uložit dřív, než se zpráva odešle, jinak by se po pádu
+    /// stejné číslo zprávy použilo podruhé s jiným obsahem.
+    pub fn prepare(&mut self, plaintext: &[u8]) -> Result<Prepared, CliError> {
+        let mut id = [0u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut id);
+        let ct = self.tx.seal(&id, plaintext).map_err(|e| CliError::Session(e.to_string()))?;
+        Ok(Prepared { id, mailbox_id: self.tx.mailbox_id(), ct })
+    }
+
+    pub fn inbox(&self) -> [u8; 32] {
+        self.rx.mailbox_id()
+    }
+}
+
+/// Odešle připravenou zprávu. Vrací počet anchorů, které ji potvrdily.
+pub async fn transmit(ws: &mut NodeSocket, msg: &Prepared) -> Result<u64, CliError> {
+    transmit_with_push(ws, msg, None).await
+}
+
+/// Jako `transmit`; s `push_id` příjemce anchory po uložení zprávy pošlou wake (spec §13.6).
+pub async fn transmit_with_push(ws: &mut NodeSocket, msg: &Prepared, push_id: Option<&str>) -> Result<u64, CliError> {
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let mut request = json!({"t": "send", "id": b64u_encode(&msg.id), "mailbox_id": b64u_encode(&msg.mailbox_id), "ts": ts, "ct": msg.ct});
+    if let Some(push_id) = push_id {
+        request["push_id"] = json!(push_id);
+    }
+    let reply = rpc(ws, request).await?;
+    Ok(reply["acks"].as_u64().unwrap_or(0))
+}
+
+/// Stáhne zprávy od protistrany, dešifruje je v pořadí a potvrdí doručení. `session` je po volání nutné uložit.
+pub async fn receive(ws: &mut NodeSocket, session: &mut Session) -> Result<Received, CliError> {
+    let mailbox = session.inbox();
+    let reply = rpc(ws, json!({"t": "fetch", "mailbox_id": b64u_encode(&mailbox), "limit": 500})).await?;
+    let mut out = Received::default();
+    let mut opened = Vec::new();
+    let mut delivered = Vec::new();
+    for m in reply["messages"].as_array().map_or(&[][..], Vec::as_slice) {
+        let parsed = m["id"].as_str().and_then(b64u_decode_array::<16>).zip(m["ct"].as_str());
+        match parsed.map(|(id, ct)| (id, session.rx.open_numbered(&id, ct))) {
+            Some((id, Ok((n, plain)))) => {
+                opened.push((n, plain));
+                delivered.push(b64u_encode(&id));
+            }
+            _ => out.rejected += 1,
+        }
+    }
+    // pořadí určuje ratchet, ne `ts` (sekundová přesnost)
+    opened.sort_by_key(|(n, _)| *n);
+    out.messages = opened.into_iter().map(|(_, plain)| plain).collect();
+    if !delivered.is_empty() {
+        rpc(ws, json!({"t": "ack", "mailbox_id": b64u_encode(&mailbox), "ids": delivered})).await?;
+    }
+    Ok(out)
 }

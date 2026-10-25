@@ -47,7 +47,7 @@ Worker (`cd worker`):
 
 Node (`cd node`, Cargo workspace `ancord-node` + `ancord-cli`):
 - `cargo clippy --all-targets -- -D warnings` – bez varování
-- `cargo test` – vektory ze `spec/test-vectors/` + e2e test B1/B2 (spustí `wrangler dev` a 3 nody; vyžaduje `npm install` ve `worker/`, jinak se přeskočí; `ANCORD_SKIP_E2E=1` ho vypne)
+- `cargo test` – vektory ze `spec/test-vectors/` + data plane (`tests/dataplane.rs`) + e2e test B1–B3 (spustí `wrangler dev` a 3 nody; vyžaduje `npm install` ve `worker/`, jinak se přeskočí; `ANCORD_SKIP_E2E=1` ho vypne)
 - `cargo run -p ancord-node` – node (`WORKER_URL` je jediný povinný vstup, viz `node/README.md`)
 
 `dev/` zatím neexistuje.

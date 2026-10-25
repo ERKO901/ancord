@@ -2,7 +2,8 @@ import { canonicalBytes, type Json } from "../canonical";
 import { DOMAIN, verifySig } from "../crypto";
 import { b64uDecodeLen } from "../encoding";
 import { ensureSchedule, onPong, onResponse, startNext } from "../challenge/scheduler";
-import { ensureDirectory, epochOf } from "./directory";
+import { broadcastDirectory, ensureDirectory, epochOf } from "./directory";
+import { publishDirectory } from "./snapshot";
 import { getNode, run, type Load, type NodeRow } from "./store";
 import { log, type RegCtx } from "./context";
 
@@ -102,9 +103,15 @@ async function handleHeartbeat(ctx: RegCtx, ws: WebSocket, nodeId: string, msg: 
   );
   const epoch = epochOf(now, ctx.cfg.epochSeconds);
   ws.send(JSON.stringify({ t: "ack", seq: msg.seq, epoch }));
-  if (typeof msg.epoch === "number" && msg.epoch < epoch) {
-    const { directory } = await ensureDirectory(ctx);
+  // bez `epoch` node žádný adresář nedrží (čerstvý start), jinak by na něj čekal až do další epochy
+  if (msg.epoch === undefined || (typeof msg.epoch === "number" && msg.epoch < epoch)) {
+    const { directory, created } = await ensureDirectory(ctx);
     ws.send(JSON.stringify({ t: "directory", directory }));
+    // adresář vzniklý tady nikdo jiný nepublikuje: tick už ho vidí jako existující
+    if (created) {
+      broadcastDirectory(ctx, directory);
+      await publishDirectory(ctx.env, directory);
+    }
   }
   startNext(ctx, fresh);
 }
