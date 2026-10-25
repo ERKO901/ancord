@@ -21,6 +21,7 @@ export interface Env {
   GENESIS_NODE_IDS: string;
   PUSH_MODE: string; // "real" | "log"
   CONFIG_OVERRIDES?: string; // JSON, jen pro ladění profilu
+  PROOF_ORIGIN?: string; // jen s CLOUDFLARE_MODE=mock: základ URL pro důkaz hostname (lokální node bez tunelu)
 
   // tajemství
   WORKER_SIGNING_KEY: string;

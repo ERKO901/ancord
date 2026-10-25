@@ -311,6 +311,12 @@ export function requireKnownNode(ctx: RegCtx, auth: AuthCtx): NodeRow {
   return node;
 }
 
+/** Kam Worker pošle žádost o důkaz. `PROOF_ORIGIN` platí jen v mock režimu (lokální vývoj bez tunelu). */
+function proofOrigin(ctx: RegCtx, hostname: string): string {
+  const dev = ctx.env.CLOUDFLARE_MODE === "mock" ? ctx.env.PROOF_ORIGIN : undefined;
+  return dev ? dev.replace("{hostname}", hostname).replace(/\/+$/, "") : `https://${hostname}`;
+}
+
 export async function activate(ctx: RegCtx, auth: AuthCtx): Promise<{ status: "active" }> {
   consumeNonce(ctx, auth.replayKey);
   const node = requireKnownNode(ctx, auth);
@@ -318,7 +324,7 @@ export async function activate(ctx: RegCtx, auth: AuthCtx): Promise<{ status: "a
   if (node.status !== "pending") throw new HttpError("conflict", `node is ${node.status}`);
 
   const challenge = randomBytes(32);
-  const url = `https://${node.hostname}${PROOF_PATH}?c=${b64uEncode(challenge)}`;
+  const url = `${proofOrigin(ctx, node.hostname)}${PROOF_PATH}?c=${b64uEncode(challenge)}`;
   let res: Response;
   try {
     res = await ctx.fetcher()(url, {

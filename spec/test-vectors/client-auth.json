@@ -1,0 +1,8 @@
+{
+  "description": "Důkaz držení ek při admission na nodu (spec §8.1)",
+  "client_seed": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+  "ek": "gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q",
+  "node_id": "qnlbvwzzr7mh7dt63azrx7zpzokfom6mgajiphfz7kyhskdgobra",
+  "challenge": "Te2UdkyHZ0-YHuG64TFLGnINc9RLnJBLS6xHxuvVi74",
+  "signature": "JFy9Won8D4_0SUcRzvQaOojp4utXj_KJbTwhgjjxE0Oroq5Xt2uY2QBoEOd1UkBdv7e6DobtVLVOd4S8JjZ8Ag"
+}

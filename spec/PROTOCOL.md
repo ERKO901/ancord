@@ -32,6 +32,7 @@ kde `DOMAIN` je ASCII řetězec níže a `payload` je definován u každé zprá
 | `ancord/v1/ticket` | podpis ticketu Workerem |
 | `ancord/v1/report` | report peer witnessu |
 | `ancord/v1/push-reg` | registrace push tokenu klientem |
+| `ancord/v1/client-auth` | důkaz držení efemerního klíče klienta (admission na nodu) |
 
 Hashe: `blake3` (32 B) pro identitu a HRW, `sha256` pro hashcash, Merkle stromy, hash-chain a těla požadavků.
 
@@ -194,6 +195,15 @@ Počet nodů určuje profil (`route_nodes`, výchozí 3), první je preferovaný
 {"v":1,"nid":"<node_id>","ek":"<ek b64u>","exp":1760000120,"n":"<b64u 16 B>"}
 ```
 `sig` = Ed25519 klíčem Workeru přes doménu `ancord/v1/ticket` a `payload = canonical_json(body)` (přesně ty bajty, které jsou v prvním segmentu). Node ticket přijme, jen když `nid` je jeho `node_id`, `exp > now`, podpis sedí a `n` nebyl v platnosti použit. Klient se navíc prokáže držením `ek` (podpis výzvy nodu efemerním klíčem, definuje protokol data plane).
+
+### 8.1 Admission na nodu
+
+Klient se připojí na `wss://<hostname>/client` (WebSocket, textové JSON zprávy, max. 64 KiB). Průběh:
+
+1. Node hned po upgradu pošle `{"t":"hello","node_id":"<node_id>","challenge":"<b64u 32 B>"}`; `challenge` je náhodná a platí jen pro toto spojení.
+2. Klient do `auth_timeout_s` (výchozí 10 s) odpoví `{"t":"auth","ticket":"<ticket>","sig":"<b64u>"}`, kde `sig` je Ed25519 klíčem `ek` přes doménu `ancord/v1/client-auth` a `payload = challenge(32 B) ‖ node_id(UTF-8)`. Ticket sám bez `ek` tedy nestačí, ukradený ticket je bez soukromého klíče k ničemu.
+3. Node ověří ticket (§8: podpis Workeru, `nid`, `exp`), podpis proti `ek` z ticketu a že `n` nebyl použit (jednorázové do `exp`). Při úspěchu odpoví `{"t":"ready"}`, jinak `{"t":"error","reason":"…"}` a zavře spojení kódem `4401`. Bez `auth` do limitu se zavře kódem `4408`.
+4. Po `ready` node odpovídá na `{"t":"ping"}` zprávou `{"t":"pong"}`. Další zprávy data plane definuje fáze B3.
 
 Volba nodů: viz `worker/` (power-of-two-choices nad váženým výběrem filtrovaným podle vzdálenosti klienta z `request.cf`). Klienti na pořadí nemají spoléhat nad rámec „první je preferovaný“.
 

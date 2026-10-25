@@ -140,6 +140,17 @@ async function main() {
   const ek = b64uEncode(keys[1]!.pub);
   const ticketNonce = sha256(utf8("ticket-nonce")).slice(0, 16);
   const ticket = await issueTicket(worker.signer, nodeIdOf(k1.pub), ek, 1760000120, ticketNonce);
+  const clientChallenge = sha256(utf8("client-auth-challenge"));
+  const clientPayload = concat(clientChallenge, utf8(nodeIdOf(k1.pub)));
+  write("client-auth.json", {
+    description: "Důkaz držení ek při admission na nodu (spec §8.1)",
+    client_seed: keys[1]!.seed,
+    ek: b64uEncode(keys[1]!.pub),
+    node_id: nodeIdOf(k1.pub),
+    challenge: b64uEncode(clientChallenge),
+    signature: b64uEncode(await keys[1]!.signer.sign(DOMAIN.clientAuth, clientPayload)),
+  });
+
   write("ticket.json", {
     description: "Ticket (spec §8)",
     worker_seed: worker.seed,

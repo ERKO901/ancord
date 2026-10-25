@@ -275,6 +275,8 @@ Vývoj běží na firemní zóně **`melonet.cz`** (sdílená zóna s existujíc
 
 **Stav (fáze A):** A1–A5 jsou implementovány v `worker/` a splňují kritéria přijetí v testech (vitest + Miniflare, `npm test` v `worker/`), včetně sdílených vektorů v `spec/test-vectors/`. Nic není nasazeno.
 
+**Stav (fáze B):** B1 a B2 jsou implementovány v `node/` a splňují kritéria přijetí v integračním testu `node/crates/ancord-node/tests/e2e.rs` (tři nody proti lokálně spuštěnému Workeru v `wrangler dev`, mock Cloudflare, bez tunelu) a ve sdílených vektorech. B3 a B4 zatím ne. Nic není nasazeno.
+
 **Deploy a DNS se zatím neřeší.** Nejdřív se napíše a lokálně otestuje kód, nasazení na Cloudflare a Docker prostředí přijdou až ve fázi C. Fáze A a B nic nevytvářejí v Cloudflare a nepotřebují DNS ani `.env`.
 
 **Fáze A: Worker (load balancer a control plane), TypeScript, složka `worker/`. Dělá se jako první.**
