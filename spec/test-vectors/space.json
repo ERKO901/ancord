@@ -1,0 +1,99 @@
+{
+  "description": "Proof of Space (spec §9.2): tabulka, Merkle kořen a otevření",
+  "seed": "XB0hyuCr2u9U2LZ0Zb6k2qaUPPwYcWzsn7qb9TacJdA",
+  "leaves": 16,
+  "t0": "shTJg5HMUibVOOXuSOPSDnA_Fb-tJC2UrpA3wgFyzD0",
+  "table": [
+    "shTJg5HMUibVOOXuSOPSDnA_Fb-tJC2UrpA3wgFyzD0",
+    "t2ZAI89-CZQQvQODlXcN4LsQ7DdPgI2QjeDkbsrd55I",
+    "YxVcO_cpEokrVZrfS4BxsfKv-2qI_-PIVOktgVMM_LQ",
+    "DSIpFgOrZri2r-Anum7Nnz9elUvwTfjeX3oXsBvs6NA",
+    "kCKkMUxxByw5ZThvL74qTwG0Q_hXrFmwonJweVbtE5o",
+    "ezYIMLm8rm3W33298cX_wPYnzxgMmSXdixGkoqekITE",
+    "1luRFmnkW1ShpS-m_8au6TQbmfVFSZ_DWPIcC-JSadA",
+    "V6gWSPzi4p7NCrbJdm73NhHLsXFtLC7RM2ZGA7TzkzU",
+    "otFviKOzAw5ycILKL2zWFtwUcwANkJxwGqhcBJAXeC8",
+    "KJC499Vh_ekU2g_LoWsTbyihayZugV3Etasi1XDEjSQ",
+    "enSSGs5_xhuQnt2Z8xJ-K1PqRK2KZOTSW6XqtzpHzx0",
+    "OKAeKJXhdDMHrwBBSrAn6hqjY_CkyxnUWz-VMRTPYjI",
+    "Phdy9DBukZTyviu3dHI3msnOReccG3ooUFD6WSukljc",
+    "jslN5eh7C8vcZ78RiA5mcc24evGuhts0kEypC64EDc0",
+    "D5kGsnMZLSW-WqXk0fqFG_XQa0A79dauTVJg19JoYDk",
+    "UaEx90T_wMcjBxquUq19aZHsJ9PweUEGl6c6LfOsL1w"
+  ],
+  "root": "jhgyGwSOJY7QCrOirgPcB6vA7mBR04ukH49aRnpAnRs",
+  "openings": [
+    {
+      "i": 3,
+      "leaf": "DSIpFgOrZri2r-Anum7Nnz9elUvwTfjeX3oXsBvs6NA",
+      "path": [
+        "h9h6br4PSDxiPxiWSV1UzMVNkM60k30Zxdl5pRJm3OU",
+        "Txmrfh4poHYZFJDYnRJtc83fUhNU_8hG1yuKPYaimYk",
+        "PmNFOnL_VCGFeEyQuBQkkmRjLNzQaejqizYu1pSKA2g",
+        "7ful8JZasLZ-6XdsbS8IYy-57s0Ea1yXrG_1shie0Ss"
+      ],
+      "prev": "YxVcO_cpEokrVZrfS4BxsfKv-2qI_-PIVOktgVMM_LQ",
+      "prev_path": [
+        "-diVI1tQ_02jYKvrxm1ImiF9ses_CNK83t9UoLMdb4U",
+        "Txmrfh4poHYZFJDYnRJtc83fUhNU_8hG1yuKPYaimYk",
+        "PmNFOnL_VCGFeEyQuBQkkmRjLNzQaejqizYu1pSKA2g",
+        "7ful8JZasLZ-6XdsbS8IYy-57s0Ea1yXrG_1shie0Ss"
+      ],
+      "ref": "shTJg5HMUibVOOXuSOPSDnA_Fb-tJC2UrpA3wgFyzD0",
+      "ref_path": [
+        "X5apSHI5-i5-D082fs7LX9Wx6UUietOfTnRw3n33oYE",
+        "h_QumBc7K2VCt910JlagEgYROi1cBhZaQuRmZ7RiNz0",
+        "PmNFOnL_VCGFeEyQuBQkkmRjLNzQaejqizYu1pSKA2g",
+        "7ful8JZasLZ-6XdsbS8IYy-57s0Ea1yXrG_1shie0Ss"
+      ]
+    },
+    {
+      "i": 9,
+      "leaf": "KJC499Vh_ekU2g_LoWsTbyihayZugV3Etasi1XDEjSQ",
+      "path": [
+        "7Z3GRoCIdGOHj-EeoNmJkqiBhWp3_RFCslokJgCXhSI",
+        "1AVbTZFKTGUuY-4EtcP-eznyN5Scq3jVj1ZsN0XVJpU",
+        "gb0Zl8vq8KMPn6bM6sk97Jz69c_F1CqOMiP_vEIW4Uo",
+        "YZ3FeWmDZBxLA81H6x4InPPDFbruj3hA67W1omC8EzQ"
+      ],
+      "prev": "otFviKOzAw5ycILKL2zWFtwUcwANkJxwGqhcBJAXeC8",
+      "prev_path": [
+        "wNS9JeNEa050XAEYPaZZoJ0B92-6U6R-ucTBjHqSb24",
+        "1AVbTZFKTGUuY-4EtcP-eznyN5Scq3jVj1ZsN0XVJpU",
+        "gb0Zl8vq8KMPn6bM6sk97Jz69c_F1CqOMiP_vEIW4Uo",
+        "YZ3FeWmDZBxLA81H6x4InPPDFbruj3hA67W1omC8EzQ"
+      ],
+      "ref": "ezYIMLm8rm3W33298cX_wPYnzxgMmSXdixGkoqekITE",
+      "ref_path": [
+        "YijyVycdjgIQzujmmH_CL5d3Up4iCe_k0epzN1-Us4w",
+        "SWLKhZNFzNQHmUcviueJ7LENNE5L0fPKoCgaY2Kwr_I",
+        "_gBjUQCuP8hZDd2qfOpfwPFAZ4xHdnvrAc5xttsIXNo",
+        "7ful8JZasLZ-6XdsbS8IYy-57s0Ea1yXrG_1shie0Ss"
+      ]
+    },
+    {
+      "i": 15,
+      "leaf": "UaEx90T_wMcjBxquUq19aZHsJ9PweUEGl6c6LfOsL1w",
+      "path": [
+        "qdBBt-l7u9JEKt6Nu0sV1Oo6bA3ofj9iLgG2UWt-8W4",
+        "Ik6bUBFf1NE-w8ir-YHU3P-2o1gA9x2Ots_k1gklc30",
+        "-xAl2ekZR0pvSjhM-wsjYZPKoSdG0GBj8207_XTxszs",
+        "YZ3FeWmDZBxLA81H6x4InPPDFbruj3hA67W1omC8EzQ"
+      ],
+      "prev": "D5kGsnMZLSW-WqXk0fqFG_XQa0A79dauTVJg19JoYDk",
+      "prev_path": [
+        "8zFRKyv2pxZ0Kla_GIe2rQfYS1XmwKf1obBlnc-5P_Q",
+        "Ik6bUBFf1NE-w8ir-YHU3P-2o1gA9x2Ots_k1gklc30",
+        "-xAl2ekZR0pvSjhM-wsjYZPKoSdG0GBj8207_XTxszs",
+        "YZ3FeWmDZBxLA81H6x4InPPDFbruj3hA67W1omC8EzQ"
+      ],
+      "ref": "kCKkMUxxByw5ZThvL74qTwG0Q_hXrFmwonJweVbtE5o",
+      "ref_path": [
+        "u7cU0AYOU0POq9YYtnl03gEiq-FjPfBmR398dt1bd98",
+        "SWLKhZNFzNQHmUcviueJ7LENNE5L0fPKoCgaY2Kwr_I",
+        "_gBjUQCuP8hZDd2qfOpfwPFAZ4xHdnvrAc5xttsIXNo",
+        "7ful8JZasLZ-6XdsbS8IYy-57s0Ea1yXrG_1shie0Ss"
+      ]
+    }
+  ]
+}

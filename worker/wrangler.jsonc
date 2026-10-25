@@ -1,0 +1,59 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ancord",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "REGISTRY", "class_name": "Registry" },
+      { "name": "LIMITER", "class_name": "RateLimiter" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Registry", "RateLimiter"] }
+  ],
+
+  "kv_namespaces": [
+    { "binding": "ROUTING_KV" },
+    { "binding": "PUSH_KV" }
+  ],
+  "r2_buckets": [
+    { "binding": "BW_BLOBS", "bucket_name": "ancord-bw-blobs" }
+  ],
+  "queues": {
+    "producers": [{ "binding": "PUSH_QUEUE", "queue": "ancord-push" }],
+    "consumers": [
+      {
+        "queue": "ancord-push",
+        "max_batch_size": 25,
+        "max_batch_timeout": 2,
+        "max_retries": 5,
+        "dead_letter_queue": "ancord-push-dlq"
+      }
+    ]
+  },
+  "triggers": { "crons": ["* * * * *"] },
+
+  // Tajemství (nastavují se přes `wrangler secret put`, nikdy ne zde):
+  //   WORKER_SIGNING_KEY   Ed25519 seed (32 B, base64url) – podpis ticketů a adresáře
+  //   CF_API_TOKEN         užší token Workeru (Tunnel Edit + DNS Edit pro zónu)
+  //   ADMIN_TOKEN          bearer pro /admin/*
+  //   CHALLENGE_HMAC_KEY   32 B base64url – tokeny bandwidth výzev
+  //   PUSH_ENC_KEY         32 B base64url – šifrování push tokenů
+  //   FCM_SERVICE_ACCOUNT  JSON service accountu (FCM v1)
+  //   APNS_KEY_P8, APNS_KEY_ID, APNS_TEAM_ID, APNS_TOPIC
+  "vars": {
+    "PROFILE": "dev",
+    "ZONE_DOMAIN": "melonet.cz",
+    "WORKER_HOST": "ancord.melonet.cz",
+    "CLOUDFLARE_MODE": "mock",
+    "CF_ACCOUNT_ID": "",
+    "CF_ZONE_ID": "",
+    "NODE_ORIGIN": "http://localhost:8080",
+    "GENESIS_NODE_IDS": "",
+    "PUSH_MODE": "log"
+  }
+}

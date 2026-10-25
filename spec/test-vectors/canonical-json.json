@@ -1,0 +1,40 @@
+{
+  "description": "RFC 8785 omezené na celá čísla (spec §1.2)",
+  "cases": [
+    {
+      "input": {
+        "b": 1,
+        "a": [
+          true,
+          null,
+          "x"
+        ],
+        "c": {
+          "z": 1,
+          "y": 2
+        }
+      },
+      "canonical": "{\"a\":[true,null,\"x\"],\"b\":1,\"c\":{\"y\":2,\"z\":1}}"
+    },
+    {
+      "input": {
+        "é": "ž\n\"\\",
+        "n": -5,
+        "big": 9007199254740991
+      },
+      "canonical": "{\"big\":9007199254740991,\"n\":-5,\"é\":\"ž\\n\\\"\\\\\"}"
+    },
+    {
+      "input": [],
+      "canonical": "[]"
+    },
+    {
+      "input": {},
+      "canonical": "{}"
+    },
+    {
+      "input": "plain",
+      "canonical": "\"plain\""
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "description": "Podepsaný HTTP request (spec §3)",
+  "seed": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+  "method": "POST",
+  "path_and_query": "/wake?x=1",
+  "body": "{\"push_id\":\"x\"}",
+  "t": 1760000000,
+  "n": "7Tz4GRZxi0ivNvpRUBqwig",
+  "payload": "POST\n/wake?x=1\n1760000000\n7Tz4GRZxi0ivNvpRUBqwig\n1jD-4E2FhZB5ujyV6NIWICtVqsfIjCUMmwf54C5K75M",
+  "authorization": "Ancord-Ed25519 k=iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w,t=1760000000,n=7Tz4GRZxi0ivNvpRUBqwig,s=e6oOg2jjy-eeSmcq9EEmnC1xEj_KHyQlPypredeXpkPHS0Vwd3p1frnBFJEOJSccqv0SnOCkZAs9ea1aF18FDA"
+}

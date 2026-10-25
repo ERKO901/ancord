@@ -1,0 +1,18 @@
+# graphify
+graphify-out/cache/
+graphify-out/20*
+graphify-out/.cloud*
+graphify-out/.graphify_root
+
+# tajemství a lokální data
+.env
+.env.*
+!.env.example
+.dev.vars
+dev/data/
+
+# build
+node_modules/
+target/
+dist/
+.wrangler/

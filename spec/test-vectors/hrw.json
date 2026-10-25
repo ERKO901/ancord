@@ -1,0 +1,77 @@
+{
+  "description": "Anchory mailboxu (spec §7)",
+  "mailbox_id": "R6GeM-nk866LBiMo2XeMHas97EnlTw5wF70dg4lS3k8",
+  "node_ids": [
+    "qnlbvwzzr7mh7dt63azrx7zpzokfom6mgajiphfz7kyhskdgobra",
+    "d3wstmlfj66ksrqxabgxs2o7yrsswhzqu6ulo4odjaabkvedhafq",
+    "tq4a23x6ylwdsmq5q7ieet7kqohxkkuewcl4oey575t437zjd3yq"
+  ],
+  "cases": [
+    {
+      "epoch": 41,
+      "r": 2,
+      "weights": [
+        {
+          "id": "qnlbvwzzr7mh7dt63azrx7zpzokfom6mgajiphfz7kyhskdgobra",
+          "weight_hex": "cd49cc0b4d1887d67602f6c105c7f4fdecde174c92e1d373e78e94a4a1e88928"
+        },
+        {
+          "id": "d3wstmlfj66ksrqxabgxs2o7yrsswhzqu6ulo4odjaabkvedhafq",
+          "weight_hex": "54c92cca24b89f7e7a25fdd0336d7b807b06caafae587c8b696ef79c63451645"
+        },
+        {
+          "id": "tq4a23x6ylwdsmq5q7ieet7kqohxkkuewcl4oey575t437zjd3yq",
+          "weight_hex": "f073db2f19277e647e02dc6e45fbd7da62e3160e850988b9d25bf2597f37ad1b"
+        }
+      ],
+      "anchors": [
+        "tq4a23x6ylwdsmq5q7ieet7kqohxkkuewcl4oey575t437zjd3yq",
+        "qnlbvwzzr7mh7dt63azrx7zpzokfom6mgajiphfz7kyhskdgobra"
+      ]
+    },
+    {
+      "epoch": 42,
+      "r": 2,
+      "weights": [
+        {
+          "id": "qnlbvwzzr7mh7dt63azrx7zpzokfom6mgajiphfz7kyhskdgobra",
+          "weight_hex": "cd266670cd42ad6a75843395265c562f2d92dbe8799d27229200514b75e6a64f"
+        },
+        {
+          "id": "d3wstmlfj66ksrqxabgxs2o7yrsswhzqu6ulo4odjaabkvedhafq",
+          "weight_hex": "7d30973e1d5b0a29e0949ae6838f9a5655e54b81997ff3e5e2bdc0bc8f3b4a76"
+        },
+        {
+          "id": "tq4a23x6ylwdsmq5q7ieet7kqohxkkuewcl4oey575t437zjd3yq",
+          "weight_hex": "58ae5a2807cd057299c93985a48cac85fd0b53782c145640a92afb364b8aade5"
+        }
+      ],
+      "anchors": [
+        "qnlbvwzzr7mh7dt63azrx7zpzokfom6mgajiphfz7kyhskdgobra",
+        "d3wstmlfj66ksrqxabgxs2o7yrsswhzqu6ulo4odjaabkvedhafq"
+      ]
+    },
+    {
+      "epoch": 43,
+      "r": 2,
+      "weights": [
+        {
+          "id": "qnlbvwzzr7mh7dt63azrx7zpzokfom6mgajiphfz7kyhskdgobra",
+          "weight_hex": "2a6cabc982ef200069054f56d1955f06c01c6f5a8abb2a9451f1fb9080656297"
+        },
+        {
+          "id": "d3wstmlfj66ksrqxabgxs2o7yrsswhzqu6ulo4odjaabkvedhafq",
+          "weight_hex": "e8125708c8e5175c77162e98d2dacae0cf9ab18ebe512f2b82b28b2050e7e0f2"
+        },
+        {
+          "id": "tq4a23x6ylwdsmq5q7ieet7kqohxkkuewcl4oey575t437zjd3yq",
+          "weight_hex": "018414ce066357860dffc56499fe7f43b71c0612e6f27dc7b43c3b71f9a5fd91"
+        }
+      ],
+      "anchors": [
+        "d3wstmlfj66ksrqxabgxs2o7yrsswhzqu6ulo4odjaabkvedhafq",
+        "qnlbvwzzr7mh7dt63azrx7zpzokfom6mgajiphfz7kyhskdgobra"
+      ]
+    }
+  ]
+}

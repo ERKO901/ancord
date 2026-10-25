@@ -1,0 +1,7 @@
+{
+  "description": "Důkaz držení klíče na hostname (spec §4.3)",
+  "seed": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+  "hostname": "nodeqnlbvwzzr7mh7dt6.melonet.cz",
+  "challenge": "Jk7SR5XQLXyVqIzQ3VvrEU2z9dE4n1f2fZSv_ez71LE",
+  "signature": "kWJUr_0sP1EaVrEe1-761-8dx30794NgQtsQkpSvfUHP-XrTRcjnXXHfDvH1zEGp7TJb_k8rv3bxpBVFfVL5Cg"
+}

@@ -1,0 +1,12 @@
+{
+  "description": "Ticket (spec §8)",
+  "worker_seed": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
+  "worker_pubkey": "_RckOFqgx1tk-3jNYC-h2ZH96_drE8WO1wLqyDXp9hg",
+  "node_id": "qnlbvwzzr7mh7dt63azrx7zpzokfom6mgajiphfz7kyhskdgobra",
+  "ek": "gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q",
+  "exp": 1760000120,
+  "nonce": "CArDUKW7qITPa2Fvrvau7w",
+  "ticket": "eyJlayI6ImdUbDNEcWg5RjE5V28xUm13MHgtek11TmlwRzA3amVpWGZZUFc0X0pzNVEiLCJleHAiOjE3NjAwMDAxMjAsIm4iOiJDQXJEVUtXN3FJVFBhMkZ2cnZhdTd3IiwibmlkIjoicW5sYnZ3enpyN21oN2R0NjNhenJ4N3pwem9rZm9tNm1nYWppcGhmejdreWhza2Rnb2JyYSIsInYiOjF9.ML58IlsZecwa25SY-KiybNgtC2btWNklEqx1eB6f8mEQ8wa67SCBYOG35JDJ--2Sy1yfQ_T5_C1OMCDLvKnICQ",
+  "valid_at": 1760000000,
+  "expired_at": 1760000120
+}

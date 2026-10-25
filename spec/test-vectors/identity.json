@@ -1,0 +1,24 @@
+{
+  "description": "node_id = base32(blake3(pubkey)); hostname = 'node' + node_id[0..16] + '.' + zone",
+  "zone": "melonet.cz",
+  "cases": [
+    {
+      "seed": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+      "pubkey": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w",
+      "node_id": "qnlbvwzzr7mh7dt63azrx7zpzokfom6mgajiphfz7kyhskdgobra",
+      "hostname": "nodeqnlbvwzzr7mh7dt6.melonet.cz"
+    },
+    {
+      "seed": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+      "pubkey": "gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q",
+      "node_id": "d3wstmlfj66ksrqxabgxs2o7yrsswhzqu6ulo4odjaabkvedhafq",
+      "hostname": "noded3wstmlfj66ksrqx.melonet.cz"
+    },
+    {
+      "seed": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+      "pubkey": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY_k2NsFGFKyHN9E",
+      "node_id": "tq4a23x6ylwdsmq5q7ieet7kqohxkkuewcl4oey575t437zjd3yq",
+      "hostname": "nodetq4a23x6ylwdsmq5.melonet.cz"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "description": "Heartbeat: sig přes kanonické JSON bez pole sig (spec §5)",
+  "seed": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+  "message": {
+    "t": "hb",
+    "seq": 7,
+    "ts": 1760000000,
+    "epoch": 41,
+    "load": {
+      "conns": 12,
+      "max_conns": 2000,
+      "cpu_pct": 8,
+      "mem_pct": 31
+    }
+  },
+  "canonical": "{\"epoch\":41,\"load\":{\"conns\":12,\"cpu_pct\":8,\"max_conns\":2000,\"mem_pct\":31},\"seq\":7,\"t\":\"hb\",\"ts\":1760000000}",
+  "sig": "5hUkyqDE90HNEbNFpbq2jTfcQhup4ADmbbUSukGDVscIliwudanZt25ay9Y0wTofrTyhairKOjhiM9RhPQonCA"
+}

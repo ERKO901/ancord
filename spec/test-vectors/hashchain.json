@@ -1,0 +1,21 @@
+{
+  "description": "CPU hash-chain (spec §9.1): h0 = sha256(seed ‖ lane_le_u32), h_{i+1} = sha256(h_i)",
+  "seed": "VUgG0DSwLH7ZRSk2SMG5YjT-0cUw5WUvi2m3LKy1-WQ",
+  "lanes": 2,
+  "iters": 1000,
+  "every": 250,
+  "checkpoints": [
+    [
+      "bbuvxhStGDIfvo889gQJ1f5JJ6zB4xPqBR1mfUi38Js",
+      "yTfhn761zzoIEIacSBocXeCr9majHo9IgJDLnIpCiJQ",
+      "WHHSLf0nxzxGaQxkuMoUHQ5wBuTGV29YXEwHi3UMfFs",
+      "A58nMN7O0nmpcZ6-Tzxvm3c-xzlNm6pVZDgyD_ggyBc"
+    ],
+    [
+      "yNwFisGpKSrQwV0DlTUGbgtz8Afwyhvi-VzHFKP0XYw",
+      "Gk0BBcKfKB-d6KkSX3DHVID-8vZoT5ncas-VMY-VeEE",
+      "_lflK9seqzyHqm5FPOMuunbboo2Kp3rFpZNoyo4HEuE",
+      "yBPs4RI8ASdptS-EG_aQaMtB7kdy6Ni12lomUIF0rn8"
+    ]
+  ]
+}

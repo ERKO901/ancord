@@ -1,0 +1,10 @@
+{
+  "description": "Registrace push tokenu (spec §10.1)",
+  "push_seed": "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU",
+  "push_pubkey": "bnoc3Smwt4_ROvTFWY_v9O8qlxZuPKby5Pv8zYBQW_E",
+  "push_id": "sc6655e5lutgjzxpgf6d7rg6yslv6ezipl344p7u3wp56gn3fv7a",
+  "register_payload": "{\"op\":\"register\",\"platform\":\"fcm\",\"push_id\":\"sc6655e5lutgjzxpgf6d7rg6yslv6ezipl344p7u3wp56gn3fv7a\",\"token\":\"device-token-123\",\"ts\":1760000000}",
+  "register_sig": "NXzYHfmptUHyDouIUhcPTBuBjhj3JNZaNodTWALQ57xoVNaLp31E2onSu4PXsMcyVS8z0yzCoAmEsBuGLOJDAA",
+  "delete_payload": "{\"op\":\"delete\",\"push_id\":\"sc6655e5lutgjzxpgf6d7rg6yslv6ezipl344p7u3wp56gn3fv7a\",\"ts\":1760000000}",
+  "delete_sig": "nz4LWntt948orAxAakSqGstw4Kvqc4ASSyqF0QmfZ095092i9YoMhqmjExpdkshkuTLLA-m_MXQ55Q2nOdpyDw"
+}

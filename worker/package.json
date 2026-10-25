@@ -1,0 +1,25 @@
+{
+  "name": "ancord-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Load balancer a control plane s\u00edt\u011b ancord (Cloudflare Worker)",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run test",
+    "vectors": "tsx scripts/gen-vectors.ts"
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.4.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.7",
+    "@cloudflare/workers-types": "^5.20261025.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.5",
+    "wrangler": "^4.152.0"
+  }
+}
