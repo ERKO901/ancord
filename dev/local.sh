@@ -32,7 +32,7 @@ python3 "$ROOT/dev/local-forward.py" $FPORT "${map[@]}" &
 until curl -sf http://127.0.0.1:$WPORT/health >/dev/null; do sleep 1; done
 
 for i in $(seq 1 "$N"); do
-  WORKER_URL=http://127.0.0.1:$WPORT DATA_DIR=$RUN/node$i NODE_NAME=node$i LISTEN=127.0.0.1:$((BASE_PORT+i)) CLOUDFLARED_BIN=none \
+  TRUST_WORKER_KEY_ON_FIRST_USE=1 WORKER_URL=http://127.0.0.1:$WPORT DATA_DIR=$RUN/node$i NODE_NAME=node$i LISTEN=127.0.0.1:$((BASE_PORT+i)) CLOUDFLARED_BIN=none \
   CLAIM_CPU_CORES=2 CLAIM_RAM_MB=256 CLAIM_STORAGE_GB=1 PEER_URL_TEMPLATE="http://127.0.0.1:$FPORT/{host}" RUST_LOG=info \
     "$NODE" >"$RUN/logs/node$i.log" 2>&1 &
 done

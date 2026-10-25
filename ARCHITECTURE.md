@@ -46,7 +46,7 @@ Klient ─(1) /route─►│  API, tickety  ◄───► registr, skóre, lo
 Tok:
 1. Klient zavolá `GET /route`. Worker přečte routing snapshot z KV a vrátí 3 nody s podepsaným ticketem.
 2. Klient se připojí na první node přes WSS (Cloudflare Tunnel) a předloží ticket.
-3. Node zprávy ukládá a replikuje na anchory. Pokud příjemce není online, požádá Worker o push.
+3. Node (gateway) spočítá anchory mailboxu příjemce a oznámí jim, že je mailbox online u něj (presence). Odesílatelův node zprávu uloží na anchory, ti ji online příjemci okamžitě přepošlou na jeho gateway. Pokud příjemce online není, zpráva čeká na anchorech a anchor požádá Worker o push (viz 6.3).
 
 ## 4. Skrytí IP
 
@@ -117,7 +117,7 @@ Implementace: challenge běží po heartbeat WebSocketu, nejvýše jeden na node
 ### 5.4 Push notifikace
 - Worker drží FCM/APNs přihlašovací údaje, **nody je nevidí**.
 - Klient registruje push token přímo Workeru pod blinded `push_id` odvozeným z mailbox tajemství. Token je uložen šifrovaně.
-- Anchor, který přijme zprávu pro mailbox bez online odběratele, pošle podepsaný `POST /wake {push_id, mailbox_id}`. Worker ověří, že node je registrovaný a v dobrém stavu, že je podle aktuální epochy **skutečným anchorem** daného mailboxu, a aplikuje rate-limit per node a per `push_id` s koalescencí. Pak přes **Queue** odešle tichý data-push bez obsahu a bez adres nodů.
+- Anchor, který přijme zprávu pro mailbox **bez online odběratele** (nemá platnou presence, viz 6.3), pošle podepsaný `POST /wake {push_id, mailbox_id}`. Worker ověří, že node je registrovaný a v dobrém stavu, že je podle aktuální epochy **skutečným anchorem** daného mailboxu, a aplikuje rate-limit per node a per `push_id` s koalescencí. Pak přes **Queue** odešle tichý data-push bez obsahu a bez adres nodů.
 - Worker vidí jen `push_id` a čas.
 
 ## 6. Data plane (nody, Rust)
@@ -131,9 +131,32 @@ Anchory zůstávají. Mění se zdroj členství:
 - Úložiště: embedded (redb nebo RocksDB), žádný MongoDB.
 
 ### 6.2 Šifrování a transport
-- Klient ↔ node: WSS přes Tunnel + ticket, aplikační E2E ratchet (model ze současného `encryption.service`, přepsat na ChaCha20-Poly1305 + HKDF, ověřit proti test vektorům z JS verze).
-- Node ↔ node: **každý request podepsán Ed25519 identitou nodu** a ověřen proti adresáři (nahrazuje sdílený secret). Replay ochrana: timestamp + okno nonce. Později QUIC (quinn).
+- **Cloudflare ukončuje TLS**, takže samotné WSS/HTTPS přes Tunnel Cloudflare před `mailbox_id`, tickety a `push_id` neskryje. Proto platí dvě vrstvy: vlastní autentizovaný šifrovaný kanál (jako v prototypu `melo`, kde měl `enc_handshake_*` a ratchet nad Socket.IO, jen důsledněji) a nad ním E2E ratchet zpráv. Specifikace: `spec/PROTOCOL.md` §14.
+- Klient ↔ node: po `hello` výměna efemerních X25519 klíčů, **node podepíše přepis handshaku svou Ed25519 identitou** a klient ho ověří proti `node_id` z ticketu podepsaného Workerem (klíč Workeru má klient připnutý mimo síť). Pak jsou všechny rámce šifrované (ChaCha20-Poly1305, čítač, padding na 256 B), včetně ticketu a `subscribe`. Cloudflare vidí jen IP, čas a zaokrouhlenou velikost.
+- Node ↔ node: **session** navázaná podepsaným requestem iniciátora (`/n/hs`), efemerním X25519 a podepsanou odpovědí respondera (identita z adresáře), pak operace šifrované XChaCha20-Poly1305 (`/n/x`) s ochranou proti replayi. Holé API neexistuje. Session se rotuje po 10 minutách (forward secrecy). Později QUIC (quinn).
+- Bez důvěry v první stažení: klíč Workeru je připnutý v konfiguraci nodu i klienta (`WORKER_PUBKEY`), jinak by Cloudflare mohl podvrhnout adresář a tickety.
 - Anti-spam: rate-limit a PoW per klient zůstávají, plus kvóty per ticket.
+
+### 6.3 Online doručení a presence
+
+> **Oprava návrhu.** První verze tohoto dokumentu a `spec/PROTOCOL.md` §13 popisovaly jen `send`, `fetch` a `ack`, takže si klient zprávy musel tahat sám a push se posílal vždy. To byl omyl: vypadl z toho hlavní mechanismus původního prototypu (`../melo`). Správně je to takto a implementace i spec se mají podle toho upravit.
+
+Worker slouží klientovi **jen k získání 3 nejbližších a nejvýkonnějších nodů** (5.3). Dál se Worker doručování zpráv neúčastní. Klient se připojí na nejlepší z nich, tomu se říká **gateway**.
+
+Tok:
+1. **Presence.** Klient po připojení pošle gateway `subscribe {mailbox_id}`. Gateway spočítá anchory mailboxu (6.1) a každému z nich pošle podepsané `presence {mailbox_id, gateway, exp}`: „tento mailbox je online u mě“. Anchor si to uloží s krátkým TTL. Gateway presence pravidelně obnovuje a při odpojení klienta ji zruší.
+2. **Odeslání.** Odesílatelův node (koordinátor) spočítá stejné anchory a zprávu na ně pošle (R=3, kvorum 2, jak v 6.1).
+3. **Okamžité doručení.** Anchor zprávu uloží. Pokud má pro mailbox platnou presence, přepošle ji na gateway příjemce (node↔node, podepsaný request). Gateway ji (už zašifrovanou klientem, ratchet je klientská věc) pošle příjemci po otevřeném WSS. Anchor odpoví `delivered_online`.
+4. **Označení doručeno.** Zprávu označí za doručenou (náhrobek) klientský `ack` na všech anchorech. Předání gatewayi náhrobek nevytváří: kdyby spojení zaniklo dřív, než klient zprávu přečetl, zpráva by se ztratila. Online doručení tak jen vynechá wake, zpráva zůstává `pending` do `ack` a případné duplicity klient zahodí podle `id`.
+5. **Příjemce není online.** Nikdo nemá presence, zpráva zůstane `pending` na anchorech a anchor pošle Workeru `wake` (5.4). Po připojení klient udělá `subscribe` i `fetch` a vyzvedne, co čekalo.
+6. **Záloha.** Když doručení online selže (presence je zastaralá, gateway nedostupná), zpráva zůstává `pending` a klient ji dostane přes `fetch`. Doručení je *at least once*, `id` zprávy je idempotentní, takže duplicity klient zahodí.
+
+Důsledky:
+- Wake push se posílá jen tehdy, když zprávu nešlo doručit online.
+- Anchor je tedy zároveň úložiště i **rozcestník**: ví, kde je příjemce, a zprávu mu pošle sám. Odesílatel nemusí gateway příjemce znát.
+- Presence je jen v paměti anchoru s krátkým TTL. Při změně epochy ji nové anchory dostanou z nejbližšího obnovení gateway, handoff presence se nepřenáší.
+- Anchor ví z presence, na kterém nodu je mailbox, ale ne kdo za ním stojí (`mailbox_id` je blinded).
+- Rozdíl oproti prototypu: tam se používal ještě záložní okruh 5 anchorů a presence v DB. Tady je presence v paměti a kvorum je řízeno adresářem epochy, žádný záložní okruh navíc není, dokud se neukáže potřeba.
 
 ## 7. Cloudflare zdroje a cena
 

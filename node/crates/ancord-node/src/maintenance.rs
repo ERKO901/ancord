@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::data;
+use crate::presence;
 use crate::state::NodeState;
 use crate::time::unix_now;
 
@@ -38,13 +39,21 @@ pub async fn run(st: Arc<NodeState>) {
     let mut tick = tokio::time::interval(Duration::from_secs(st.cfg.maintenance_interval_s.max(1)));
     let janitor_every = Duration::from_secs(st.cfg.janitor_interval_s.max(1));
     let mut last_purge = tokio::time::Instant::now();
+    let mut renew = tokio::time::interval(Duration::from_secs(st.cfg.presence_renew_s.max(1)));
     purge_expired(&st).await;
     loop {
-        tick.tick().await;
-        handoff_if_needed(&st).await;
-        if last_purge.elapsed() >= janitor_every {
-            purge_expired(&st).await;
-            last_purge = tokio::time::Instant::now();
+        tokio::select! {
+            _ = tick.tick() => {
+                handoff_if_needed(&st).await;
+                if last_purge.elapsed() >= janitor_every {
+                    purge_expired(&st).await;
+                    last_purge = tokio::time::Instant::now();
+                }
+            }
+            _ = renew.tick() => {
+                presence::prune(&st);
+                presence::renew_all(&st);
+            }
         }
     }
 }

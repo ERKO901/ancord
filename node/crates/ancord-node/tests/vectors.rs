@@ -177,16 +177,98 @@ fn space_file_backed_matches_memory() {
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }
 
+fn arr<const N: usize>(v: &Value, key: &str) -> [u8; N] {
+    b64u_decode_array(s(v, key)).unwrap_or_else(|| panic!("bad {key}"))
+}
+
 #[test]
-fn client_auth() {
-    let v = load("client-auth.json");
-    let client = identity_of(s(&v, "client_seed"));
-    assert_eq!(client.pubkey_b64(), s(&v, "ek"));
-    let mut payload = b64u_decode(s(&v, "challenge")).unwrap();
-    payload.extend_from_slice(s(&v, "node_id").as_bytes());
-    let sig = client.sign(sign::DOMAIN_CLIENT_AUTH, &payload);
-    assert_eq!(b64u_encode(&sig), s(&v, "signature"));
-    assert!(sign::verify(&client.pubkey(), sign::DOMAIN_CLIENT_AUTH, &payload, &sig));
+fn channel_client_node() {
+    use ancord_node::channel::{client_transcript, Channel, Ephemeral};
+    use zeroize::Zeroizing;
+    let all = load("channel.json");
+    let v = &all["client_node"];
+    let node = identity_of(s(v, "node_seed"));
+    assert_eq!(node.node_id(), s(v, "node_id"));
+    assert_eq!(node.pubkey_b64(), s(v, "npk"));
+
+    let ce = Ephemeral::from_bytes(Zeroizing::new(arr(v, "ce_secret")));
+    let ne = Ephemeral::from_bytes(Zeroizing::new(arr(v, "ne_secret")));
+    assert_eq!(b64u_encode(&ce.public()), s(v, "ce"));
+    assert_eq!(b64u_encode(&ne.public()), s(v, "ne"));
+    let th = client_transcript(&arr(v, "challenge"), &ce.public(), &ne.public(), &node.pubkey(), node.node_id());
+    assert_eq!(b64u_encode(&th), s(v, "th"));
+
+    let node_sig = node.sign(sign::DOMAIN_CHAN_NODE, &th);
+    assert_eq!(b64u_encode(&node_sig), s(v, "node_sig"));
+    let ek = identity_of(s(v, "ek_seed"));
+    assert_eq!(ek.pubkey_b64(), s(v, "ek"));
+    assert_eq!(b64u_encode(&ek.sign(sign::DOMAIN_CHAN_CLIENT, &th)), s(v, "client_sig"));
+
+    let (cpub, npub) = (ce.public(), ne.public());
+    let shared = ce.diffie_hellman(&npub).unwrap();
+    assert_eq!(b64u_encode(&*shared), s(v, "shared"));
+    assert_eq!(*ne.diffie_hellman(&cpub).unwrap(), *shared);
+
+    // zachycené rámce z referenční implementace se dešifrují a naše rámce jim odpovídají bajt po bajtu
+    let mut node_side = Channel::for_node(&shared, &th);
+    for f in v["c2n_frames"].as_array().unwrap() {
+        let frame = b64u_decode(s(f, "frame")).unwrap();
+        assert_eq!(node_side.recv.open(&frame).unwrap(), s(f, "plaintext").as_bytes());
+    }
+    let mut client_side = Channel::for_client(&shared, &th);
+    for f in v["c2n_frames"].as_array().unwrap() {
+        assert_eq!(b64u_encode(&client_side.send.seal(s(f, "plaintext").as_bytes()).unwrap()), s(f, "frame"));
+    }
+    let mut node_out = Channel::for_node(&shared, &th);
+    for f in v["n2c_frames"].as_array().unwrap() {
+        assert_eq!(b64u_encode(&node_out.send.seal(s(f, "plaintext").as_bytes()).unwrap()), s(f, "frame"));
+        let frame = b64u_decode(s(f, "frame")).unwrap();
+        assert_eq!(client_side.recv.open(&frame).unwrap(), s(f, "plaintext").as_bytes());
+    }
+}
+
+#[test]
+fn channel_padding() {
+    let all = load("channel.json");
+    for case in all["padding"].as_array().unwrap() {
+        let len = case["len"].as_u64().unwrap() as usize;
+        assert_eq!(ancord_node::channel::padded_len(len), case["padded"].as_u64().unwrap() as usize);
+    }
+}
+
+#[test]
+fn channel_node_node() {
+    use ancord_node::channel::{n2n_transcript, open_request, open_response, seal_request, seal_response, Ephemeral, SessionKeys};
+    use zeroize::Zeroizing;
+    let all = load("channel.json");
+    let v = &all["node_node"];
+    let (initiator, responder) = (identity_of(s(v, "initiator_seed")), identity_of(s(v, "responder_seed")));
+    assert_eq!(initiator.pubkey_b64(), s(v, "initiator_pk"));
+    assert_eq!(responder.pubkey_b64(), s(v, "responder_pk"));
+    let ce = Ephemeral::from_bytes(Zeroizing::new(arr(v, "ce_secret")));
+    let ne = Ephemeral::from_bytes(Zeroizing::new(arr(v, "ne_secret")));
+    assert_eq!((b64u_encode(&ce.public()), b64u_encode(&ne.public())), (s(v, "ce").to_owned(), s(v, "ne").to_owned()));
+    let sid: [u8; 16] = arr(v, "sid");
+    let th = n2n_transcript(&initiator.pubkey(), &responder.pubkey(), &arr(v, "request_nonce"), &ce.public(), &ne.public(), &sid);
+    assert_eq!(b64u_encode(&th), s(v, "th"));
+    assert_eq!(b64u_encode(&responder.sign(sign::DOMAIN_N2N_RESP, &th)), s(v, "resp_sig"));
+    let npub = ne.public();
+    let shared = ce.diffie_hellman(&npub).unwrap();
+    assert_eq!(b64u_encode(&*shared), s(v, "shared"));
+    let keys = SessionKeys::derive(&shared, &th);
+    assert_eq!(b64u_encode(&*keys.i2r), s(v, "k_i2r"));
+    assert_eq!(b64u_encode(&*keys.r2i), s(v, "k_r2i"));
+
+    let rq = &v["request"];
+    let rq_nonce: [u8; 24] = arr(rq, "nonce");
+    let sealed = seal_request(&keys.i2r, &sid, &rq_nonce, s(rq, "plaintext").as_bytes()).unwrap();
+    assert_eq!(b64u_encode(&sealed), s(rq, "c"));
+    assert_eq!(open_request(&keys.i2r, &sid, &rq_nonce, &sealed).unwrap(), s(rq, "plaintext").as_bytes());
+    let rs = &v["response"];
+    let rs_nonce: [u8; 24] = arr(rs, "nonce");
+    let sealed = seal_response(&keys.r2i, &sid, &rq_nonce, &rs_nonce, s(rs, "plaintext").as_bytes()).unwrap();
+    assert_eq!(b64u_encode(&sealed), s(rs, "c"));
+    assert_eq!(open_response(&keys.r2i, &sid, &rq_nonce, &rs_nonce, &sealed).unwrap(), s(rs, "plaintext").as_bytes());
 }
 
 #[test]

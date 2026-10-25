@@ -5,11 +5,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use ancord_node::channel;
 use ancord_node::config::Config;
 use ancord_node::data::{self, DataError};
 use ancord_node::encoding::b64u_encode;
 use ancord_node::identity::Identity;
 use ancord_node::maintenance;
+use ancord_node::n2n;
+use ancord_node::presence;
 use ancord_node::server;
 use ancord_node::sign::{auth_header, verify_request};
 use ancord_node::state::NodeState;
@@ -154,10 +157,13 @@ async fn rejects_when_directory_is_missing_or_too_small() {
     assert_eq!(data::send(&lonely.state, MB, [1; 16], unix_now(), vec![1]).await, Err(DataError::InsufficientNodes));
 }
 
-async fn signed_post(from: &TestNode, to: &TestNode, path: &str, body: &Value) -> reqwest::Response {
-    let bytes = serde_json::to_vec(body).unwrap();
-    let header = auth_header(from.state.identity.signing_key(), "POST", path, &bytes, unix_now(), &rand::random());
-    reqwest::Client::new().post(format!("http://{}{path}", to.host)).header("authorization", header).body(bytes).send().await.unwrap()
+fn dnode(n: &TestNode) -> DirectoryNode {
+    DirectoryNode { id: n.state.identity.node_id().to_owned(), pk: n.state.identity.pubkey_b64(), host: n.host.clone() }
+}
+
+/// Operace na jiném nodu přes zabezpečený kanál (`PROTOCOL.md` §14.2): `(stav, tělo)`.
+async fn call_peer(from: &TestNode, to: &TestNode, op: &str, body: &Value) -> (u16, Value) {
+    n2n::call(&from.state, &dnode(to), op, body).await.unwrap()
 }
 
 fn put_body(mailbox: &[u8; 32]) -> Value {
@@ -165,7 +171,7 @@ fn put_body(mailbox: &[u8; 32]) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn peer_api_checks_signature_membership_and_anchor_role() {
+async fn peer_api_checks_membership_and_anchor_role() {
     let nodes = cluster(3).await;
     let outsider = spawn_node().await;
     let dir = nodes[0].state.directory().unwrap();
@@ -173,26 +179,148 @@ async fn peer_api_checks_signature_membership_and_anchor_role() {
     let target = nodes.iter().find(|n| anchor_ids.iter().any(|a| a == n.state.identity.node_id())).unwrap();
 
     // člen adresáře, který je anchorem: projde
-    let ok = signed_post(&nodes[0], target, "/n/put", &put_body(&MB)).await;
-    assert_eq!(ok.status(), 200);
-    assert_eq!(ok.json::<Value>().await.unwrap()["status"], "stored");
-    let again = signed_post(&nodes[0], target, "/n/put", &put_body(&MB)).await;
-    assert_eq!(again.json::<Value>().await.unwrap()["status"], "duplicate");
+    let (status, body) = call_peer(&nodes[0], target, "put", &put_body(&MB)).await;
+    assert_eq!((status, body["status"].as_str()), (200, Some("stored")));
+    let (_, again) = call_peer(&nodes[0], target, "put", &put_body(&MB)).await;
+    assert_eq!(again["status"], "duplicate");
 
-    // cizí node mimo adresář
-    assert_eq!(signed_post(&outsider, target, "/n/put", &put_body(&MB)).await.status(), 403);
-    assert_eq!(signed_post(&outsider, target, "/n/get", &json!({"mailbox_id": b64u_encode(&MB)})).await.status(), 403);
+    // cizí node mimo adresář neprojde ani handshakem
+    assert_eq!(call_peer(&outsider, target, "put", &put_body(&MB)).await.0, 403);
+    assert_eq!(call_peer(&outsider, target, "get", &json!({"mailbox_id": b64u_encode(&MB)})).await.0, 403);
 
-    // bez podpisu
-    let bare = reqwest::Client::new().post(format!("http://{}/n/get", target.host)).body("{}").send().await.unwrap();
+    // neznámá operace a nesmysl uvnitř kanálu
+    assert_eq!(call_peer(&nodes[0], target, "drop_everything", &json!({})).await.0, 400);
+    assert_eq!(call_peer(&nodes[0], target, "get", &json!({"mailbox_id": 5})).await.0, 400);
+}
+
+/// Ruční iniciátor, který nepoužívá `n2n.rs`: ověřuje responder nezávisle na naší implementaci volajícího.
+struct ManualSession {
+    sid: [u8; 16],
+    keys: channel::SessionKeys,
+}
+
+async fn manual_handshake(from: &TestNode, to: &TestNode) -> ManualSession {
+    let ce = channel::Ephemeral::generate();
+    let ce_pub = ce.public();
+    let bytes = serde_json::to_vec(&json!({"ce": b64u_encode(&ce_pub)})).unwrap();
+    let nonce: [u8; 16] = rand::random();
+    let header = auth_header(from.state.identity.signing_key(), "POST", "/n/hs", &bytes, unix_now(), &nonce);
+    let res = reqwest::Client::new().post(format!("http://{}/n/hs", to.host)).header("authorization", header).body(bytes).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    let a: Value = res.json().await.unwrap();
+    let ne: [u8; 32] = ancord_node::encoding::b64u_decode_array(a["ne"].as_str().unwrap()).unwrap();
+    let sid: [u8; 16] = ancord_node::encoding::b64u_decode_array(a["sid"].as_str().unwrap()).unwrap();
+    let sig: [u8; 64] = ancord_node::encoding::b64u_decode_array(a["sig"].as_str().unwrap()).unwrap();
+    let th = channel::n2n_transcript(&from.state.identity.pubkey(), &to.state.identity.pubkey(), &nonce, &ce_pub, &ne, &sid);
+    assert!(ancord_node::sign::verify(&to.state.identity.pubkey(), ancord_node::sign::DOMAIN_N2N_RESP, &th, &sig));
+    ManualSession { sid, keys: channel::SessionKeys::derive(&ce.diffie_hellman(&ne).unwrap(), &th) }
+}
+
+fn envelope(s: &ManualSession, nonce: &[u8; 24], request: &Value) -> Value {
+    let c = channel::seal_request(&s.keys.i2r, &s.sid, nonce, request.to_string().as_bytes()).unwrap();
+    json!({"sid": b64u_encode(&s.sid), "n": b64u_encode(nonce), "c": b64u_encode(&c)})
+}
+
+async fn post_x(to: &TestNode, body: &Value) -> reqwest::Response {
+    reqwest::Client::new().post(format!("http://{}/n/x", to.host)).json(body).send().await.unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn peer_channel_rejects_plaintext_tamper_replay_and_unknown_session() {
+    let nodes = cluster(3).await;
+    let dir = nodes[0].state.directory().unwrap();
+    let anchor_ids = anchors_of(&dir, &MB);
+    let target = nodes.iter().find(|n| anchor_ids.iter().any(|a| a == n.state.identity.node_id())).unwrap();
+    let http = reqwest::Client::new();
+
+    // staré holé API už neexistuje, ani s platným podpisem
+    for path in ["/n/put", "/n/get", "/n/ack", "/n/presence", "/n/deliver"] {
+        let bytes = serde_json::to_vec(&put_body(&MB)).unwrap();
+        let header = auth_header(nodes[0].state.identity.signing_key(), "POST", path, &bytes, unix_now(), &rand::random());
+        let res = http.post(format!("http://{}{path}", target.host)).header("authorization", header).body(bytes).send().await.unwrap();
+        assert!(res.status() == 404 || res.status() == 405, "{path} must not exist in plaintext, got {}", res.status());
+    }
+
+    // handshake: bez podpisu, s cizím klíčem mimo adresář a replay
+    let hs_body = serde_json::to_vec(&json!({"ce": b64u_encode(&channel::Ephemeral::generate().public())})).unwrap();
+    let bare = http.post(format!("http://{}/n/hs", target.host)).body(hs_body.clone()).send().await.unwrap();
     assert_eq!(bare.status(), 401);
+    let header = auth_header(nodes[0].state.identity.signing_key(), "POST", "/n/hs", &hs_body, unix_now(), &[5; 16]);
+    let hs = || http.post(format!("http://{}/n/hs", target.host)).header("authorization", header.clone()).body(hs_body.clone()).send();
+    assert_eq!(hs().await.unwrap().status(), 200);
+    assert_eq!(hs().await.unwrap().status(), 409, "replayed handshake");
+    let low_order = serde_json::to_vec(&json!({"ce": b64u_encode(&[0u8; 32])})).unwrap();
+    let header = auth_header(nodes[0].state.identity.signing_key(), "POST", "/n/hs", &low_order, unix_now(), &[6; 16]);
+    let res = http.post(format!("http://{}/n/hs", target.host)).header("authorization", header).body(low_order).send().await.unwrap();
+    assert_eq!(res.status(), 400, "low order point must be refused");
 
-    // replay stejného requestu
-    let bytes = serde_json::to_vec(&json!({"mailbox_id": b64u_encode(&MB)})).unwrap();
-    let header = auth_header(nodes[0].state.identity.signing_key(), "POST", "/n/get", &bytes, unix_now(), &[5; 16]);
-    let send = || reqwest::Client::new().post(format!("http://{}/n/get", target.host)).header("authorization", header.clone()).body(bytes.clone()).send();
-    assert_eq!(send().await.unwrap().status(), 200);
-    assert_eq!(send().await.unwrap().status(), 409);
+    // šifrované požadavky
+    let s = manual_handshake(&nodes[0], target).await;
+    let get = json!({"op": "get", "ts": unix_now(), "body": {"mailbox_id": b64u_encode(&MB)}});
+    let nonce: [u8; 24] = rand::random();
+    let env = envelope(&s, &nonce, &get);
+    let ok = post_x(target, &env).await;
+    assert_eq!(ok.status(), 200);
+    let answer: Value = ok.json().await.unwrap();
+    let rn: [u8; 24] = ancord_node::encoding::b64u_decode_array(answer["n"].as_str().unwrap()).unwrap();
+    let rc = ancord_node::encoding::b64u_decode(answer["c"].as_str().unwrap()).unwrap();
+    let plain = channel::open_response(&s.keys.r2i, &s.sid, &nonce, &rn, &rc).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&plain).unwrap()["status"], 200);
+
+    // replay téhož obálky: odpověď nese 409 uvnitř kanálu
+    let replay: Value = post_x(target, &env).await.json().await.unwrap();
+    let rn: [u8; 24] = ancord_node::encoding::b64u_decode_array(replay["n"].as_str().unwrap()).unwrap();
+    let rc = ancord_node::encoding::b64u_decode(replay["c"].as_str().unwrap()).unwrap();
+    let plain = channel::open_response(&s.keys.r2i, &s.sid, &nonce, &rn, &rc).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&plain).unwrap()["status"], 409);
+
+    // odpověď nejde přiřadit k jinému požadavku
+    assert!(channel::open_response(&s.keys.r2i, &s.sid, &[0; 24], &rn, &rc).is_err());
+
+    // porušený šifrový text, cizí session, starý čas
+    let mut tampered = envelope(&s, &rand::random(), &get);
+    let mut c = ancord_node::encoding::b64u_decode(tampered["c"].as_str().unwrap()).unwrap();
+    c[0] ^= 1;
+    tampered["c"] = json!(b64u_encode(&c));
+    assert_eq!(post_x(target, &tampered).await.status(), 401);
+    let mut foreign = envelope(&s, &rand::random(), &get);
+    foreign["sid"] = json!(b64u_encode(&[7; 16]));
+    let res = post_x(target, &foreign).await;
+    assert_eq!(res.status(), 401);
+    assert_eq!(res.json::<Value>().await.unwrap()["error"]["code"], "unknown_session");
+    let stale = json!({"op": "get", "ts": unix_now() - 3600, "body": {"mailbox_id": b64u_encode(&MB)}});
+    let n3: [u8; 24] = rand::random();
+    let reply: Value = post_x(target, &envelope(&s, &n3, &stale)).await.json().await.unwrap();
+    let rn: [u8; 24] = ancord_node::encoding::b64u_decode_array(reply["n"].as_str().unwrap()).unwrap();
+    let rc = ancord_node::encoding::b64u_decode(reply["c"].as_str().unwrap()).unwrap();
+    let plain = channel::open_response(&s.keys.r2i, &s.sid, &n3, &rn, &rc).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&plain).unwrap()["status"], 400, "stale timestamp");
+    assert_eq!(post_x(target, &json!({"sid": "x"})).await.status(), 400);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn caller_rejects_responder_that_cannot_prove_identity() {
+    let nodes = cluster(2).await;
+    // „node“ na cestě (třeba Cloudflare), který odpoví vlastním podpisem místo podpisu identity z adresáře
+    let impostor_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+    let app = axum::Router::new().route(
+        "/n/hs",
+        axum::routing::post(move || {
+            let key = impostor_key.clone();
+            async move {
+                let sig = ancord_node::sign::sign(&key, ancord_node::sign::DOMAIN_N2N_RESP, &[0; 32]);
+                axum::Json(json!({"ne": b64u_encode(&channel::Ephemeral::generate().public()), "sid": b64u_encode(&[1; 16]), "sig": b64u_encode(&sig)}))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut victim = dnode(&nodes[1]);
+    victim.host = listener.local_addr().unwrap().to_string();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let err = n2n::call(&nodes[0].state, &victim, "get", &json!({})).await.unwrap_err();
+    assert!(err.contains("prove its identity"), "{err}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -209,8 +337,7 @@ async fn non_anchor_refuses_foreign_mailbox() {
         .unwrap();
     let non_anchor = nodes.iter().find(|n| n.state.identity.node_id() == outsider_id).unwrap();
     let caller = nodes.iter().find(|n| n.state.identity.node_id() != outsider_id).unwrap();
-    let res = signed_post(caller, non_anchor, "/n/put", &put_body(&mailbox)).await;
-    assert_eq!(res.status(), 403);
+    assert_eq!(call_peer(caller, non_anchor, "put", &put_body(&mailbox)).await.0, 403);
     // přesto lze zprávu poslat přes tento node: koordinátor nemusí být anchor
     data::send(&non_anchor.state, mailbox, [1; 16], unix_now(), b"via".to_vec()).await.unwrap();
     assert_eq!(data::fetch(&non_anchor.state, mailbox, 10).await.unwrap().len(), 1);
@@ -355,5 +482,87 @@ async fn malformed_push_id_is_rejected_by_peer_api() {
     let target = nodes.iter().find(|n| anchor_ids.iter().any(|a| a == n.state.identity.node_id())).unwrap();
     let mut body = put_body(&MB);
     body["push_id"] = json!("not-a-push-id");
-    assert_eq!(signed_post(&nodes[0], target, "/n/put", &body).await.status(), 400);
+    assert_eq!(call_peer(&nodes[0], target, "put", &body).await.0, 400);
+}
+
+fn subscribe(node: &TestNode, conn: u64) -> tokio::sync::mpsc::Receiver<Value> {
+    let (tx, rx) = tokio::sync::mpsc::channel(16);
+    assert!(presence::add_subscriber(&node.state, conn, tx, MB));
+    rx
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn online_recipient_gets_message_pushed_and_no_wake() {
+    let mock = mock_worker().await;
+    let nodes = cluster_with_worker(4, &mock.url).await;
+    let push_id = "c".repeat(52);
+    // příjemce je připojen na nodes[0] (gateway), odesílatel píše přes nodes[3]
+    let mut inbox = subscribe(&nodes[0], 1);
+    assert!(presence::announce(&nodes[0].state, MB, true).await >= 2);
+
+    data::send_with_push(&nodes[3].state, MB, [1; 16], unix_now(), b"hello".to_vec(), Some(push_id.clone())).await.unwrap();
+    let pushed = tokio::time::timeout(Duration::from_secs(3), inbox.recv()).await.unwrap().unwrap();
+    assert_eq!(pushed["t"], "message");
+    assert_eq!(pushed["id"], b64u_encode(&[1; 16]));
+    assert_eq!(pushed["ct"], b64u_encode(b"hello"));
+
+    // od více anchorů přijde zpráva jednou
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(inbox.try_recv().is_err(), "duplicates from other anchors must be dropped");
+    assert!(mock.wakes.lock().unwrap().is_empty(), "online delivery must not wake");
+    // zpráva zůstává pending do klientského ack
+    assert_eq!(data::fetch(&nodes[1].state, MB, 10).await.unwrap().len(), 1);
+
+    // po zrušení odběru a presence se wake vrací
+    assert!(presence::remove_subscriber(&nodes[0].state, 1, MB));
+    presence::announce(&nodes[0].state, MB, false).await;
+    data::send_with_push(&nodes[3].state, MB, [2; 16], unix_now(), b"later".to_vec(), Some(push_id)).await.unwrap();
+    assert!(!wait_for_wakes(&mock, 1).await.is_empty(), "offline recipient must be woken");
+    assert!(inbox.try_recv().is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stale_presence_falls_back_to_wake() {
+    let mock = mock_worker().await;
+    let nodes = cluster_with_worker(3, &mock.url).await;
+    // presence existuje, ale gateway už odběratele nemá (spojení zaniklo bez zrušení presence)
+    let inbox = subscribe(&nodes[0], 1);
+    presence::announce(&nodes[0].state, MB, true).await;
+    drop(inbox);
+
+    data::send_with_push(&nodes[1].state, MB, [1; 16], unix_now(), b"x".to_vec(), Some("d".repeat(52))).await.unwrap();
+    assert!(!wait_for_wakes(&mock, 1).await.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_anchors_may_deliver_and_presence_needs_membership() {
+    let nodes = cluster(4).await;
+    let dir = nodes[0].state.directory().unwrap();
+    let anchor_ids = anchors_of(&dir, &MB);
+    let (anchors, others): (Vec<&TestNode>, Vec<&TestNode>) = nodes.iter().partition(|n| anchor_ids.iter().any(|a| a == n.state.identity.node_id()));
+    let gateway = others[0];
+    let _inbox = subscribe(gateway, 1);
+    let body = json!({"mailbox_id": b64u_encode(&MB), "id": b64u_encode(&[9; 16]), "ts": unix_now(), "ct": b64u_encode(b"x")});
+
+    // doručit do gateway smí jen anchor mailboxu
+    assert_eq!(call_peer(anchors[0], gateway, "deliver", &body).await.0, 200);
+    assert_eq!(call_peer(gateway, gateway, "deliver", &body).await.0, 403, "a non-anchor cannot push into a gateway");
+
+    // presence smí oznámit jen člen adresáře, a jen anchoru
+    let presence_body = json!({"mailbox_id": b64u_encode(&MB), "exp": unix_now() + 30});
+    assert_eq!(call_peer(gateway, anchors[0], "presence", &presence_body).await.0, 200);
+    assert_eq!(call_peer(gateway, gateway, "presence", &presence_body).await.0, 403, "not an anchor");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_is_reestablished_after_responder_forgets_it() {
+    let nodes = cluster(3).await;
+    let dir = nodes[0].state.directory().unwrap();
+    let anchor_ids = anchors_of(&dir, &MB);
+    let target = nodes.iter().find(|n| anchor_ids.iter().any(|a| a == n.state.identity.node_id())).unwrap();
+    let get = json!({"mailbox_id": b64u_encode(&MB)});
+    assert_eq!(call_peer(&nodes[0], target, "get", &get).await.0, 200);
+    // restart responderu: session zmizí z paměti
+    target.state.n2n_in.lock().unwrap().clear();
+    assert_eq!(call_peer(&nodes[0], target, "get", &get).await.0, 200, "caller must renegotiate transparently");
 }

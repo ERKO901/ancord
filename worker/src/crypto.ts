@@ -16,7 +16,6 @@ export const DOMAIN = {
   ticket: "ancord/v1/ticket",
   report: "ancord/v1/report",
   pushReg: "ancord/v1/push-reg",
-  clientAuth: "ancord/v1/client-auth",
 } as const;
 
 export type Domain = (typeof DOMAIN)[keyof typeof DOMAIN];

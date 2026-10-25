@@ -30,6 +30,11 @@ pub struct Config {
     #[arg(long, env = "WORKER_PUBKEY")]
     pub worker_pubkey: Option<String>,
 
+    /// Dovolí stáhnout klíč Workeru při prvním startu bez `WORKER_PUBKEY`. Stažení vede přes Cloudflare, takže kdo ho
+    /// podvrhne, ovládne důvěru nodu v adresář. V produkci vypnuto: klíč se zadává pevně (`WORKER_PUBKEY`).
+    #[arg(long, env = "TRUST_WORKER_KEY_ON_FIRST_USE", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new())]
+    pub trust_worker_key_on_first_use: bool,
+
     /// Příkaz `cloudflared`; hodnota `none` tunel nespouští (lokální vývoj, testy).
     #[arg(long, env = "CLOUDFLARED_BIN", default_value = "cloudflared")]
     pub cloudflared_bin: String,
@@ -79,6 +84,14 @@ pub struct Config {
     /// Nejkratší odstup mezi dvěma wake téhož `push_id` z tohoto nodu (spec §13.6).
     #[arg(long, env = "WAKE_MIN_INTERVAL_S", default_value_t = 10)]
     pub wake_min_interval_s: u64,
+
+    /// Jak dlouho platí presence mailboxu na anchoru, když ji gateway neobnoví (spec §13.7).
+    #[arg(long, env = "PRESENCE_TTL_S", default_value_t = 60)]
+    pub presence_ttl_s: u64,
+
+    /// Jak často gateway obnovuje presence svých odběratelů (méně než polovina TTL).
+    #[arg(long, env = "PRESENCE_RENEW_S", default_value_t = 20)]
+    pub presence_renew_s: u64,
 
     /// Jak často údržba kontroluje, zda je potřeba handoff po změně epochy.
     #[arg(long, env = "MAINTENANCE_INTERVAL_S", default_value_t = 30)]

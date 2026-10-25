@@ -41,7 +41,7 @@ Worker je **důvěryhodný pro dostupnost a poctivost routingu, nikoli pro obsah
 Hostitel instance (např. na Flux) může vidět privátní klíč nodu. U vlastních nodů se to akceptuje. U otevřené sítě to není model hrozeb, který by šlo předpokládat: operátor nodu je považován za neprůhledného škodlivého, ale ne za schopného číst klíče jiných operátorů. Perzistence klíče při přesunu instance je otevřený bod 9.
 
 ## 5. Mimo rozsah
-Mobilní klient, UI, tokenová ekonomika. Ochrana metadat před Cloudflarem (ten vidí IP a časování, ne obsah) je akceptované riziko celého návrhu.
+Mobilní klient, UI, tokenová ekonomika. Cloudflare vidí IP adresy, čas a zaokrouhlenou velikost rámců (to je akceptované riziko celého návrhu). Obsah ani `mailbox_id` ne: provoz klient↔node i node↔node je šifrovaný vlastním kanálem (sekce 7).
 
 ## 6. Data plane (node)
 
@@ -56,3 +56,23 @@ Operátor anchoru vidí: `mailbox_id` (hash sdíleného tajemství, nespojiteln�
 | Falešný anchor nebo podvržený node↔node request | každý request podepsán identitou nodu a ověřen proti adresáři Workeru (aktuální nebo předchozí epocha), nonce proti replayi, příjemce zapisuje a vydává jen mailboxy, pro které je sám anchorem | škodlivý anchor smí číst a mazat mailboxy, jejichž je anchorem (kvorum čtení ho přehlasuje jen částečně, protože čtení sjednocuje) |
 | Oživení doručené zprávy | doručení se zapisuje jako náhrobek až do vypršení, `delivered` vyhrává při `put` i handoffu | ack, který nedorazil na žádný z anchorů, zprávu doručí podruhé; klient je odolný díky ratchetu (stejné `n` už nejde otevřít) |
 | Ztráta dat při změně epochy | handoff nových anchorů před smazáním (potvrzení aspoň `quorum`), příjemci přijímají zápis i podle předchozí epochy | uzel, který ve chvíli změny epochy padne před dokončením handoffu, nechá data na ostatních dvou kopiích; přežití dvou současných výpadků není garantováno |
+
+## 7. Zabezpečený kanál (`PROTOCOL.md` §14)
+
+Cloudflare ukončuje TLS, takže je to aktivní útočník uprostřed (nebo ho může kdokoli, kdo Cloudflare ovládne). Kanál proto nespoléhá na TLS.
+
+| Hrozba | Obrana v implementaci | Zbytkové riziko |
+|---|---|---|
+| Pasivní čtení provozu (`mailbox_id`, tickety, `push_id`, zprávy) na okraji Cloudflare | autentizovaný šifrovaný kanál klient↔node a node↔node, X25519 + ChaCha20-Poly1305 / XChaCha20-Poly1305, padding na 256 B | IP, čas, počet a hrubá velikost rámců, kdo se připojuje na který node |
+| Man-in-the-middle při handshaku | node podepisuje přepis handshaku (výzva, oba efemerní klíče, jeho klíč a `node_id`) Ed25519 identitou; klient ji ověří proti `node_id` z ticketu podepsaného Workerem; u node↔node ověřuje iniciátor podpis klíčem z adresáře | kdo ukradne soukromý klíč nodu, může se za něj vydávat do jeho vypršení v adresáři |
+| Podvržená trasa, ticket nebo adresář | klient ověří ticket připnutým klíčem Workeru před připojením; node a klient se nikdy neřídí klíčem staženým přes Cloudflare bez výslovného vývojového přepínače (`TRUST_WORKER_KEY_ON_FIRST_USE`) | kompromitace samotného klíče Workeru (viz sekce 1); chybně připnutý klíč |
+| Krádež ticketu a jeho použití | ticket se posílá až uvnitř kanálu, jednorázový, vázaný na `ek`, podpis `ek` kryje přepis tohoto spojení | – |
+| Přehrání, vynechání, prohození rámců | čítač v nonce a v pořadí (WebSocket je uspořádaný), tag ověřen před změnou stavu, nešifrovaný rámec spojení zavře | – |
+| Přehrání node↔node requestu | handshake: podepsaný request s nonce a oknem; operace: náhodný 192bitový nonce, okno `ts` ±60 s, duplicity zahazuje responder | – |
+| Přiřazení odpovědi k jinému požadavku | AAD odpovědi obsahuje `sid` a nonce požadavku | – |
+| Prozrazení starého provozu po kompromitaci klíče | efemerní X25519 na obou stranách, session node↔node rotuje po 10 minutách | provoz probíhající během kompromitace |
+| Body malého řádu, vyčerpání session | výstup X25519 samých nul se odmítne, strop session celkem i na volajícího | – |
+| Skrytá data v paddingu | přijímá se jen kanonický padding | – |
+| Downgrade na nešifrované API | holé `/n/*` a textové rámce po handshaku neexistují | – |
+
+Co kanál z podstaty neřeší: Worker je Cloudflare a vidí své vlastní vstupy (`/route`: geolokace, `ek`; `/wake`: `push_id`, `mailbox_id`). Časová korelace provozu na obou koncích spojení (kdo kdy odešle a kdo kdy přijme) není skryta.

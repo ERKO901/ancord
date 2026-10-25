@@ -6,13 +6,16 @@ Node sítě ancord (Rust). Protokol je v `../spec/PROTOCOL.md`, architektura v `
 - **B1** identita, registrace (`register → confirm → activate`), `cloudflared`, heartbeat, odpovědi na challenge (`cpu`, `space_commit`/`space_open`, `bandwidth`, `witness`).
 - **B2** admission klientů (`/client`, ticket + důkaz držení `ek`, PROTOCOL §8.1) a minimální CLI klient.
 - **B3** data plane (`PROTOCOL.md` §13): blinded mailboxy v redb, HRW anchory podle epochy, replikace R=3 s kvorem 2, idempotentní zápis, ack s náhrobky, TTL úklid, handoff po změně epochy, podepsané node↔node requesty (`/n/put`, `/n/get`, `/n/ack`). Ratchet (ChaCha20-Poly1305 + HKDF) je klientská knihovna v `ratchet.rs`, node ho nikdy nepočítá.
-- **B4** push (`PROTOCOL.md` §13.6): `send` s volitelným `push_id` příjemce; anchor, který zprávu nově uložil, pošle Workeru podepsaný `POST /wake` (selhání wake zápis nikdy neshodí). Odběr v reálném čase zatím ne: klient zprávy vyzvedává dotazem `fetch`, proto se wake posílá vždy.
+- **B6** zabezpečený kanál (`PROTOCOL.md` §14): klient↔node i node↔node šifrované vlastním handshakem (X25519, identita nodu podpisem Ed25519, ChaCha20-Poly1305 / XChaCha20-Poly1305, padding), aby Cloudflare po ukončení TLS neviděl `mailbox_id`, tickety ani `push_id`. Klient ověřuje ticket připnutým klíčem Workeru (`WORKER_PUBKEY`, nutný i pro CLI). Holé `/n/*` API neexistuje. Vektory `channel.json` z nezávislé implementace `spec/reference/channel.py`.
+- **B5** presence a online doručení (`PROTOCOL.md` §13.7): `subscribe` u gateway, presence na anchorech (jen v paměti, TTL), anchor novou zprávu přepošle gateway příjemce (`/n/presence`, `/n/deliver`); wake jen když doručení online selže. CLI: `ancord watch`.
+- **B4** push (`PROTOCOL.md` §13.6): `send` s volitelným `push_id` příjemce; anchor, který zprávu nově uložil, pošle Workeru podepsaný `POST /wake` (selhání wake zápis nikdy neshodí). 
 
 ## Příkazy
 ```
 cargo clippy --all-targets -- -D warnings
 cargo test                      # vektory + e2e (viz níže)
 cargo run -p ancord-node        # node
+WORKER_PUBKEY=$(curl -s http://127.0.0.1:8787/.well-known/ancord-key | jq -r .pubkey) \
 cargo run -p ancord-cli -- --worker http://127.0.0.1:8787 route
 ```
 
@@ -33,7 +36,8 @@ Jediný povinný vstup je `WORKER_URL`. Ostatní má výchozí hodnotu nebo se z
 | `WORKER_URL` | – | adresa Workeru |
 | `DATA_DIR` | `./data` | klíč (`identity.key`, práva 0600), připnutý klíč Workeru, soubory Proof of Space. Musí být perzistentní, jinak se změní `node_id` |
 | `LISTEN` | `0.0.0.0:8080` | cíl ingressu tunelu (`NODE_ORIGIN` Workeru) |
-| `WORKER_PUBKEY` | – | klíč Workeru (b64u); bez něj se při prvním startu stáhne a uloží (trust on first use) |
+| `WORKER_PUBKEY` | – | klíč Workeru (b64u), **v produkci povinný**; zjistí se při nasazení z `/.well-known/ancord-key` a předá se mimo síť |
+| `TRUST_WORKER_KEY_ON_FIRST_USE` | vypnuto | jen vývoj: bez `WORKER_PUBKEY` klíč stáhne při prvním startu přes Cloudflare (kdo ho podvrhne, ovládne důvěru nodu) |
 | `CLOUDFLARED_BIN` | `cloudflared` | `none` tunel nespouští (lokální vývoj) |
 | `CLAIM_CPU_CORES`, `CLAIM_RAM_MB`, `CLAIM_STORAGE_GB` | změřeno | tvrzené parametry (Worker jim nevěří, měří) |
 | `CLAIM_BANDWIDTH_MBPS` | 100 | tvrzená šířka pásma |
@@ -47,6 +51,8 @@ Jediný povinný vstup je `WORKER_URL`. Ostatní má výchozí hodnotu nebo se z
 | `CLIENT_MSG_RATE` | 20 | zpráv za sekundu na spojení klienta (dávka dvojnásobek) |
 | `MAINTENANCE_INTERVAL_S` | 30 | jak často se kontroluje, zda je třeba handoff |
 | `JANITOR_INTERVAL_S` | 3600 | jak často se uklízí vypršené zprávy |
+| `PRESENCE_TTL_S` | 60 | platnost presence na anchoru bez obnovení |
+| `PRESENCE_RENEW_S` | 20 | jak často gateway presence obnovuje |
 | `WAKE_MIN_INTERVAL_S` | 10 | nejkratší odstup mezi wake téhož `push_id` z tohoto nodu |
 
 Úložiště mailboxů je `DATA_DIR/mailboxes.redb` (součást perzistentní volume). Parametry sítě (R, kvorum, epocha, intervaly) node nezná: dostává je od Workeru v adresáři a v `welcome`.

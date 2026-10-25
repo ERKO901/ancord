@@ -4,6 +4,7 @@
 
 pub mod canonical;
 pub mod challenge;
+pub mod channel;
 pub mod client;
 pub mod config;
 pub mod control;
@@ -14,7 +15,9 @@ pub mod hashcash;
 pub mod hrw;
 pub mod identity;
 pub mod maintenance;
+pub mod n2n;
 pub mod peer;
+pub mod presence;
 pub mod ratchet;
 pub mod register;
 pub mod server;

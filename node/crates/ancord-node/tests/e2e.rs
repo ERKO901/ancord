@@ -10,9 +10,9 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ancord_cli::{admit, connect_any, fetch_route, receive, transmit, transmit_with_push, CliError, Role, Route, RouteNode, Session};
+use ancord_cli::{admit, admit_unchecked, connect_any, fetch_route, next_pushed, receive, rpc, subscribe, transmit, transmit_with_push, CliError, Role, Route, RouteNode, Session};
 use ancord_node::canonical::canonical_bytes;
-use ancord_node::encoding::{b64u_encode, base32_encode};
+use ancord_node::encoding::{b64u_decode_array, b64u_encode, base32_encode};
 use ancord_node::identity::{hostname_of, Identity};
 use ancord_node::sign::sign;
 use ancord_node::time::unix_now;
@@ -21,7 +21,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 use ed25519_dalek::SigningKey;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use rand::rngs::OsRng;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
@@ -69,7 +69,7 @@ struct NodeProc {
 
 fn spawn_node(n: &mut NodeProc, worker_port: u16, fwd_port: u16, log_dir: &Path, generation: u32) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_ancord-node"));
-    cmd.env("WORKER_URL", format!("http://127.0.0.1:{worker_port}"))
+    cmd.env("TRUST_WORKER_KEY_ON_FIRST_USE", "1").env("WORKER_URL", format!("http://127.0.0.1:{worker_port}"))
         .env("DATA_DIR", &n.dir)
         .env("LISTEN", format!("127.0.0.1:{}", n.port))
         .env("CLOUDFLARED_BIN", "none")
@@ -229,31 +229,42 @@ async fn three_nodes_register_challenge_route_and_admit() {
     let url_for = |host: &str| format!("ws://127.0.0.1:{}/client", by_host[host]);
 
     // klient se připojí s ticketem
-    let (first, mut ws) = connect_any(&route, &ek, &url_for).await.expect("admission with a valid ticket");
-    ws.send(Message::text(r#"{"t":"ping"}"#)).await.unwrap();
-    let pong = ws.next().await.unwrap().unwrap();
-    assert!(pong.to_text().unwrap().contains("pong"));
+    let key_doc: Value = http.get(format!("{base}/.well-known/ancord-key")).send().await.unwrap().json().await.unwrap();
+    let worker_key: [u8; 32] = b64u_decode_array(key_doc["pubkey"].as_str().unwrap()).unwrap();
+    let (first, mut ws) = connect_any(&route, &ek, &worker_key, &url_for).await.expect("admission with a valid ticket");
+    ws.send_json(&json!({"t": "ping"})).await.unwrap();
+    assert_eq!(ws.recv_json().await.unwrap()["t"], "pong");
 
     // stejný ticket podruhé: jednorázový
-    let err = admit(&url_for(&first.hostname), &first, &ek).await.expect_err("reused ticket must fail");
+    let err = admit_unchecked(&url_for(&first.hostname), &first, &ek).await.expect_err("reused ticket must fail");
     assert!(err.to_string().contains("already used"), "{err}");
 
     // ticket jiného nodu
     let fresh = fetch_route(&http, &base, &ek_pub).await.unwrap();
     let (a, b) = (&fresh.nodes[0], &fresh.nodes[1]);
     let swapped = RouteNode { node_id: b.node_id.clone(), hostname: b.hostname.clone(), ticket: a.ticket.clone() };
-    let err = admit(&url_for(&b.hostname), &swapped, &ek).await.expect_err("ticket for another node must fail");
+    let err = admit_unchecked(&url_for(&b.hostname), &swapped, &ek).await.expect_err("ticket for another node must fail");
     assert!(err.to_string().contains("another node"), "{err}");
+    // klient to pozná sám, ještě než se připojí
+    let err = admit(&url_for(&b.hostname), &swapped, &ek, &worker_key).await.expect_err("client must refuse a foreign ticket");
+    assert!(err.to_string().contains("untrusted route"), "{err}");
+    // ticket podepsaný jiným klíčem než připnutým klíčem Workeru (podvržená trasa)
+    let err = admit(&url_for(&a.hostname), a, &ek, &[7; 32]).await.expect_err("client must refuse a ticket not signed by the pinned worker key");
+    assert!(err.to_string().contains("untrusted route"), "{err}");
+    // route tvrdí, že na hostname sedí jiný node: ten svou identitu nedoloží
+    let impostor = RouteNode { node_id: b.node_id.clone(), hostname: a.hostname.clone(), ticket: b.ticket.clone() };
+    let err = admit(&url_for(&a.hostname), &impostor, &ek, &worker_key).await.expect_err("wrong node behind the hostname must fail");
+    assert!(err.to_string().contains("unexpected hello"), "{err}");
 
     // špatný klíč ek: ticket bez soukromého klíče nestačí a nesmí se kvůli tomu spotřebovat
     let thief = SigningKey::generate(&mut OsRng);
-    let err = admit(&url_for(&a.hostname), a, &thief).await.expect_err("wrong ek must fail");
+    let err = admit_unchecked(&url_for(&a.hostname), a, &thief).await.expect_err("wrong ek must fail");
     assert!(err.to_string().contains("invalid client signature"), "{err}");
-    admit(&url_for(&a.hostname), a, &ek).await.expect("ticket survives a failed attempt by someone without ek");
+    admit(&url_for(&a.hostname), a, &ek, &worker_key).await.expect("ticket survives a failed attempt by someone without ek");
 
     // nesmysl místo ticketu
     let junk = RouteNode { ticket: "not-a-ticket".into(), ..b.clone() };
-    let err = admit(&url_for(&b.hostname), &junk, &ek).await.expect_err("junk ticket must fail");
+    let err = admit_unchecked(&url_for(&b.hostname), &junk, &ek).await.expect_err("junk ticket must fail");
     assert!(err.to_string().contains("malformed"), "{err}");
 
     // bez auth do limitu: 4408
@@ -274,9 +285,9 @@ async fn three_nodes_register_challenge_route_and_admit() {
     let bob_route = fetch_route(&http, &base, &bob_ek.verifying_key().to_bytes()).await.unwrap();
     // různé vstupní nody: Alice první z trasy, Bob poslední
     let first_of = |r: &Route| r.nodes[0].node_id.clone();
-    let (_, mut alice_ws) = connect_any(&alice_route, &alice_ek, &url_for).await.unwrap();
+    let (_, mut alice_ws) = connect_any(&alice_route, &alice_ek, &worker_key, &url_for).await.unwrap();
     let bob_reverse = Route { nodes: bob_route.nodes.iter().rev().cloned().collect(), ..bob_route.clone() };
-    let (bob_node, mut bob_ws) = connect_any(&bob_reverse, &bob_ek, &url_for).await.unwrap();
+    let (bob_node, mut bob_ws) = connect_any(&bob_reverse, &bob_ek, &worker_key, &url_for).await.unwrap();
     assert_ne!(first_of(&alice_route), bob_node.node_id, "test wants two different gateways");
 
     let hello = alice.prepare(b"ahoj Bobe").unwrap();
@@ -319,10 +330,19 @@ async fn three_nodes_register_challenge_route_and_admit() {
     let mut eve = Session::new([0x11; 32], Role::Responder);
     assert!(receive(&mut bob_ws, &mut eve).await.unwrap().messages.is_empty());
 
+    // B5: Bob je online (odběr u své gateway), Alice píše přes jiný node: anchor zprávu sám přepošle Bobovi
+    subscribe(&mut bob_ws, &bob).await.unwrap();
+    let live = alice.prepare(b"online doruceni").unwrap();
+    transmit(&mut alice_ws, &live).await.unwrap();
+    let pushed = next_pushed(&mut bob_ws, &mut bob, Duration::from_secs(10)).await.unwrap();
+    assert_eq!(pushed, Some(b"online doruceni".to_vec()), "anchor must push the message to the recipient's gateway");
+    assert!(receive(&mut bob_ws, &mut bob).await.unwrap().messages.is_empty(), "pushed and acked message must not come back");
+    rpc(&mut bob_ws, json!({"t": "unsubscribe", "mailbox_id": b64u_encode(&bob.inbox())})).await.unwrap();
+
     // zpráva, která přežije restart nodu (embedded úložiště) a čeká na Boba
     let pending = alice.prepare(b"pocka na restart").unwrap();
     transmit(&mut alice_ws, &pending).await.unwrap();
-    let _ = (alice_ws.close(None).await, bob_ws.close(None).await);
+    let _ = (alice_ws.close().await, bob_ws.close().await);
 
     // restart zachová node_id a node zůstane aktivní
     let before = nodes[0].id.clone();
@@ -351,7 +371,7 @@ async fn three_nodes_register_challenge_route_and_admit() {
     // B3: po restartu nodu zpráva stále čeká; Bob ji vyzvedne z libovolného nodu
     let mut bob_ws = eventually("fetch after restart", Duration::from_secs(60), || async {
         let route = fetch_route(&http, &base, &bob_ek.verifying_key().to_bytes()).await.ok()?;
-        connect_any(&route, &bob_ek, &url_for).await.ok().map(|(_, ws)| ws)
+        connect_any(&route, &bob_ek, &worker_key, &url_for).await.ok().map(|(_, ws)| ws)
     })
     .await;
     let end = Instant::now() + Duration::from_secs(60);
@@ -366,32 +386,32 @@ async fn three_nodes_register_challenge_route_and_admit() {
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
     assert_eq!(got.messages, vec![b"pocka na restart".to_vec()]);
-    let _ = bob_ws.close(None).await;
+    let _ = bob_ws.close().await;
 
     // jeden node vypnut: zápis i čtení dál fungují (kvorum 2 ze 3)
     nodes[1].proc = None;
     let alive = |route: Route, dead: &[&str]| Route { nodes: route.nodes.into_iter().filter(|n| !dead.contains(&n.node_id.as_str())).collect(), ..route };
     let dead1 = nodes[1].id.clone();
     let route = fetch_route(&http, &base, &alice_ek.verifying_key().to_bytes()).await.unwrap();
-    let (_, mut ws) = connect_any(&alive(route, &[&dead1]), &alice_ek, &url_for).await.unwrap();
+    let (_, mut ws) = connect_any(&alive(route, &[&dead1]), &alice_ek, &worker_key, &url_for).await.unwrap();
     let msg = alice.prepare(b"s jednim nodem dole").unwrap();
     let acks = transmit(&mut ws, &msg).await.expect("write with one anchor down");
     assert!(acks >= 2);
-    let _ = ws.close(None).await;
+    let _ = ws.close().await;
     let route = fetch_route(&http, &base, &bob_ek.verifying_key().to_bytes()).await.unwrap();
-    let (_, mut bob_ws) = connect_any(&alive(route, &[&dead1]), &bob_ek, &url_for).await.unwrap();
+    let (_, mut bob_ws) = connect_any(&alive(route, &[&dead1]), &bob_ek, &worker_key, &url_for).await.unwrap();
     assert_eq!(receive(&mut bob_ws, &mut bob).await.unwrap().messages, vec![b"s jednim nodem dole".to_vec()]);
 
     // druhý node vypnut: zbývá jeden anchor a zápis se odmítne
     nodes[2].proc = None;
     let dead2 = nodes[2].id.clone();
     let route = fetch_route(&http, &base, &alice_ek.verifying_key().to_bytes()).await.unwrap();
-    let (_, mut ws) = connect_any(&alive(route, &[&dead1, &dead2]), &alice_ek, &url_for).await.unwrap();
+    let (_, mut ws) = connect_any(&alive(route, &[&dead1, &dead2]), &alice_ek, &worker_key, &url_for).await.unwrap();
     let refused = alice.prepare(b"nemelo by projit").unwrap();
     match transmit(&mut ws, &refused).await {
         Err(CliError::Node { code, .. }) => assert_eq!(code, "quorum_unavailable"),
         other => panic!("expected quorum_unavailable, got {other:?}"),
     }
-    let _ = ws.close(None).await;
+    let _ = ws.close().await;
     fwd.abort();
 }

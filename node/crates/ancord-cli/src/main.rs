@@ -2,14 +2,12 @@ use std::process::ExitCode;
 
 use std::path::{Path, PathBuf};
 
-use ancord_cli::{connect_any, default_url, fetch_route, receive, transmit, NodeSocket, Role, Route, RouteNode, Session};
+use ancord_cli::{connect_any, default_url, fetch_route, next_pushed, receive, subscribe, transmit, NodeSocket, Role, Route, RouteNode, Session};
 use ancord_node::encoding::{b64u_decode_array, b64u_encode};
 use clap::{Parser, Subcommand, ValueEnum};
 use rand::RngCore;
 use ed25519_dalek::SigningKey;
-use futures_util::{SinkExt, StreamExt};
 use rand::rngs::OsRng;
-use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Parser)]
 #[command(name = "ancord", about = "ancord CLI klient")]
@@ -17,6 +15,10 @@ struct Cli {
     /// Adresa Workeru.
     #[arg(long, env = "WORKER_URL")]
     worker: String,
+    /// Veřejný klíč Workeru (b64u, 32 B), připnutý mimo síť. Bez něj klient nepřijme žádný node: tickety i nody by
+    /// jinak mohl podvrhnout kdokoli na cestě, včetně Cloudflare. Zjistí se při nasazení Workeru z `/.well-known/ancord-key`.
+    #[arg(long, env = "WORKER_PUBKEY", global = true)]
+    worker_pubkey: Option<String>,
     /// Šablona adresy nodu; `{hostname}` se nahradí. Výchozí `wss://{hostname}/client`.
     #[arg(long, global = true)]
     via: Option<String>,
@@ -43,6 +45,8 @@ enum Cmd {
     Send { file: PathBuf, text: String },
     /// Stáhne, dešifruje a potvrdí příchozí zprávy.
     Recv { file: PathBuf },
+    /// Odebere zprávy, které čekaly, a pak je vypisuje, jak přicházejí (odběr mailboxu u gateway). Konec Ctrl-C.
+    Watch { file: PathBuf },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -53,7 +57,12 @@ enum RoleArg {
 
 async fn open(cli: &Cli, ek: &SigningKey, route: &Route) -> Result<(RouteNode, NodeSocket), Box<dyn std::error::Error>> {
     let url_for = |host: &str| cli.via.as_ref().map_or_else(|| default_url(host), |t| t.replace("{hostname}", host));
-    Ok(connect_any(route, ek, url_for).await?)
+    let worker_key: [u8; 32] = cli
+        .worker_pubkey
+        .as_deref()
+        .and_then(b64u_decode_array)
+        .ok_or("WORKER_PUBKEY (32 bytes, base64url) is required to authenticate nodes")?;
+    Ok(connect_any(route, ek, &worker_key, url_for).await?)
 }
 
 fn load_session(file: &Path) -> Result<Session, Box<dyn std::error::Error>> {
@@ -91,11 +100,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Connect => {
             let (node, mut ws) = open(&cli, &ek, &route).await?;
             println!("connected to {} ({})", node.node_id, node.hostname);
-            ws.send(Message::text(r#"{"t":"ping"}"#)).await?;
-            if let Some(Ok(Message::Text(t))) = ws.next().await {
-                println!("{t}");
-            }
-            let _ = ws.close(None).await;
+            ws.send_json(&serde_json::json!({"t": "ping"})).await?;
+            println!("{}", ws.recv_json().await?);
+            ws.close().await;
         }
         Cmd::Send { file, text } => {
             let mut session = load_session(file)?;
@@ -104,7 +111,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let (node, mut ws) = open(&cli, &ek, &route).await?;
             let acks = transmit(&mut ws, &prepared).await?;
             println!("sent via {} ({acks} anchors confirmed)", node.hostname);
-            let _ = ws.close(None).await;
+            ws.close().await;
         }
         Cmd::Recv { file } => {
             let mut session = load_session(file)?;
@@ -119,7 +126,32 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             if received.rejected > 0 {
                 eprintln!("{} message(s) could not be decrypted", received.rejected);
             }
-            let _ = ws.close(None).await;
+            ws.close().await;
+        }
+        Cmd::Watch { file } => {
+            let mut session = load_session(file)?;
+            let (node, mut ws) = open(&cli, &ek, &route).await?;
+            eprintln!("watching via {}", node.hostname);
+            // nejdřív odběr (anchory pak posílají nové zprávy rovnou), pak zprávy, které čekaly offline
+            subscribe(&mut ws, &session).await?;
+            let backlog = receive(&mut ws, &mut session).await;
+            session.save(file)?;
+            for m in &backlog?.messages {
+                println!("{}", String::from_utf8_lossy(m));
+            }
+            loop {
+                let pushed = tokio::select! {
+                    p = next_pushed(&mut ws, &mut session, std::time::Duration::from_secs(25)) => p,
+                    _ = tokio::signal::ctrl_c() => break,
+                };
+                // stav ratchetu se ukládá po každé zprávě
+                session.save(file)?;
+                match pushed? {
+                    Some(m) => println!("{}", String::from_utf8_lossy(&m)),
+                    None => ws.send_json(&serde_json::json!({"t": "ping"})).await?,
+                }
+            }
+            ws.close().await;
         }
         Cmd::Init { .. } => {}
     }

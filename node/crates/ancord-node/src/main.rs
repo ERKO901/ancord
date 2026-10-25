@@ -34,9 +34,14 @@ async fn resolve_worker_key(cfg: &Config, worker: &WorkerClient) -> Result<[u8; 
     if let Ok(text) = std::fs::read_to_string(&path) {
         return b64u_decode_array(text.trim()).ok_or_else(|| NodeError(format!("{} is corrupt", path.display())));
     }
+    if !cfg.trust_worker_key_on_first_use {
+        return Err(NodeError(
+            "WORKER_PUBKEY is not set: pin the Worker key (base64url) out of band, or set TRUST_WORKER_KEY_ON_FIRST_USE=1 for development".into(),
+        ));
+    }
     let key = worker.worker_key().await?;
     std::fs::write(&path, format!("{}\n", b64u_encode(&key)))?;
-    tracing::warn!("worker key pinned on first use; set WORKER_PUBKEY to pin it explicitly");
+    tracing::warn!("worker key pinned on first use (development only); set WORKER_PUBKEY");
     Ok(key)
 }
 

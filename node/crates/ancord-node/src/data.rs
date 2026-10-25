@@ -5,18 +5,17 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 
-use rand::RngCore;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::encoding::{b64u_decode, b64u_decode_array, b64u_encode};
 use crate::hrw;
-use crate::sign::auth_header;
+use crate::n2n;
 use crate::state::NodeState;
 use crate::store::{PutOutcome, Record, StoreError};
 use crate::ticket::{DirectoryBody, DirectoryNode};
 use crate::time::unix_now;
-use crate::wake;
+use crate::presence;
 
 pub const MAX_CT_BYTES: usize = 32 * 1024;
 pub const MAX_ACK_IDS: usize = 500;
@@ -132,9 +131,9 @@ pub fn clamp_limit(limit: Option<u64>) -> usize {
 }
 
 /// Anchory mailboxu v aktuální epoše a z nich odvozené kvorum.
-struct Plan {
-    nodes: Vec<DirectoryNode>,
-    quorum: usize,
+pub(crate) struct Plan {
+    pub(crate) nodes: Vec<DirectoryNode>,
+    pub(crate) quorum: usize,
 }
 
 impl Plan {
@@ -144,13 +143,13 @@ impl Plan {
     }
 }
 
-fn anchors_in(dir: &DirectoryBody, mailbox_id: &[u8; 32]) -> Vec<DirectoryNode> {
+pub(crate) fn anchors_in(dir: &DirectoryBody, mailbox_id: &[u8; 32]) -> Vec<DirectoryNode> {
     let r = usize::try_from(dir.params.r).unwrap_or(usize::MAX);
     let ids = hrw::anchors(mailbox_id, dir.nodes.iter().map(|n| n.id.as_str()), dir.epoch, r);
     ids.iter().filter_map(|id| dir.nodes.iter().find(|n| &n.id == id).cloned()).collect()
 }
 
-fn plan(st: &NodeState, mailbox_id: &[u8; 32]) -> Result<Plan, DataError> {
+pub(crate) fn plan(st: &NodeState, mailbox_id: &[u8; 32]) -> Result<Plan, DataError> {
     let dir = st.directory().ok_or(DataError::NoDirectory)?;
     let quorum = usize::try_from(dir.params.quorum).unwrap_or(usize::MAX);
     if quorum == 0 || dir.nodes.len() < quorum {
@@ -163,6 +162,27 @@ fn plan(st: &NodeState, mailbox_id: &[u8; 32]) -> Result<Plan, DataError> {
 pub fn is_anchor(st: &NodeState, mailbox_id: &[u8; 32]) -> bool {
     let me = st.identity.node_id();
     [st.directory(), st.prev_directory()].into_iter().flatten().any(|d| anchors_in(&d, mailbox_id).iter().any(|n| n.id == me))
+}
+
+/// Node z aktuálního nebo předchozího adresáře podle jeho `node_id`.
+pub fn find_node(st: &NodeState, node_id: &str) -> Option<DirectoryNode> {
+    [st.directory(), st.prev_directory()].into_iter().flatten().find_map(|d| d.nodes.iter().find(|n| n.id == node_id).cloned())
+}
+
+/// Je `pubkey` anchorem mailboxu v aktuální nebo předchozí epoše?
+pub fn is_anchor_pubkey(st: &NodeState, pubkey: &[u8; 32], mailbox_id: &[u8; 32]) -> bool {
+    [st.directory(), st.prev_directory()]
+        .into_iter()
+        .flatten()
+        .any(|d| anchors_in(&d, mailbox_id).iter().any(|n| b64u_decode_array::<32>(&n.pk).is_some_and(|pk| &pk == pubkey)))
+}
+
+/// Node z adresáře podle veřejného klíče.
+pub fn node_by_pubkey(st: &NodeState, pubkey: &[u8; 32]) -> Option<DirectoryNode> {
+    [st.directory(), st.prev_directory()]
+        .into_iter()
+        .flatten()
+        .find_map(|d| d.nodes.iter().find(|n| b64u_decode_array::<32>(&n.pk).is_some_and(|pk| &pk == pubkey)).cloned())
 }
 
 /// Je `pubkey` nodem z aktuálního nebo předchozího adresáře?
@@ -209,7 +229,7 @@ pub async fn ack_local(st: &Arc<NodeState>, mailbox_id: [u8; 32], ids: Vec<[u8; 
 }
 
 #[derive(Debug)]
-enum OpError {
+pub(crate) enum OpError {
     Full,
     Failed(String),
 }
@@ -218,42 +238,29 @@ enum OpError {
 const FORBIDDEN_RETRIES: u32 = 2;
 const FORBIDDEN_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
 
-/// Podepsaný `POST` na jiný node (`spec/PROTOCOL.md` §13.4).
-async fn peer_post(st: &NodeState, node: &DirectoryNode, path: &str, body: &Value) -> Result<Value, OpError> {
-    let bytes = serde_json::to_vec(body).map_err(|e| OpError::Failed(e.to_string()))?;
-    let url = format!("{}{path}", st.cfg.peer_url_template.replace("{host}", &node.host));
+/// Operace na jiném nodu přes zabezpečený kanál (`spec/PROTOCOL.md` §14.2). `path` je `/n/<op>`.
+pub(crate) async fn peer_post(st: &NodeState, node: &DirectoryNode, path: &str, body: &Value) -> Result<Value, OpError> {
+    let op = path.strip_prefix("/n/").unwrap_or(path);
     let mut attempt = 0;
     loop {
-        let mut nonce = [0u8; 16];
-        rand::rngs::OsRng.fill_bytes(&mut nonce);
-        let header = auth_header(st.identity.signing_key(), "POST", path, &bytes, unix_now(), &nonce);
-        let res = st
-            .peer_http
-            .post(&url)
-            .header("authorization", header)
-            .header("content-type", "application/json")
-            .body(bytes.clone())
-            .send()
-            .await
-            .map_err(|e| OpError::Failed(e.to_string()))?;
-        let status = res.status();
-        if status.as_u16() == 403 && attempt < FORBIDDEN_RETRIES {
+        let (status, answer) = n2n::call(st, node, op, body).await.map_err(OpError::Failed)?;
+        if status == 403 && attempt < FORBIDDEN_RETRIES {
             attempt += 1;
             tokio::time::sleep(FORBIDDEN_DELAY).await;
             continue;
         }
-        if status.as_u16() == 507 {
+        if status == 507 {
             return Err(OpError::Full);
         }
-        if !status.is_success() {
+        if !(200..300).contains(&status) {
             return Err(OpError::Failed(format!("{} answered {status}", node.id)));
         }
-        return res.json().await.map_err(|e| OpError::Failed(e.to_string()));
+        return Ok(answer);
     }
 }
 
 /// Spustí `op` na všech uzlech současně. Úlohy běží dál, i když volající přestane čekat.
-fn fan_out<T, F, Fut>(st: &Arc<NodeState>, nodes: Vec<DirectoryNode>, op: F) -> mpsc::Receiver<Result<T, OpError>>
+pub(crate) fn fan_out<T, F, Fut>(st: &Arc<NodeState>, nodes: Vec<DirectoryNode>, op: F) -> mpsc::Receiver<Result<T, OpError>>
 where
     T: Send + 'static,
     F: Fn(Arc<NodeState>, DirectoryNode, bool) -> Fut + Send + Sync + 'static,
@@ -271,7 +278,7 @@ where
     rx
 }
 
-fn local(e: DataError) -> OpError {
+pub(crate) fn local(e: DataError) -> OpError {
     match e {
         DataError::MailboxFull => OpError::Full,
         other => OpError::Failed(other.to_string()),
@@ -293,8 +300,8 @@ pub async fn send_with_push(st: &Arc<NodeState>, mailbox_id: [u8; 32], id: [u8; 
         async move {
             if is_self {
                 let outcome = put_local(&st, mailbox_id, id, ts, exp, Some(ct.to_vec())).await.map_err(local)?;
-                if let (PutOutcome::Stored, Some(push_id)) = (outcome, push_id) {
-                    wake::spawn(&st, push_id, mailbox_id);
+                if outcome == PutOutcome::Stored {
+                    presence::after_store(&st, mailbox_id, id, ts, ct.to_vec(), push_id);
                 }
                 return Ok(());
             }

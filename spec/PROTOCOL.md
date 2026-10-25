@@ -32,7 +32,9 @@ kde `DOMAIN` je ASCII řetězec níže a `payload` je definován u každé zprá
 | `ancord/v1/ticket` | podpis ticketu Workerem |
 | `ancord/v1/report` | report peer witnessu |
 | `ancord/v1/push-reg` | registrace push tokenu klientem |
-| `ancord/v1/client-auth` | důkaz držení efemerního klíče klienta (admission na nodu) |
+| `ancord/v1/chan-node` | node podepisuje přepis handshaku s klientem (§14.1) |
+| `ancord/v1/chan-client` | klient (klíč `ek`) podepisuje přepis handshaku (§14.1) |
+| `ancord/v1/n2n-resp` | responder podepisuje přepis handshaku node↔node (§14.2) |
 
 Hashe: `blake3` (32 B) pro identitu a HRW, `sha256` pro hashcash, Merkle stromy, hash-chain a těla požadavků.
 
@@ -198,12 +200,13 @@ Počet nodů určuje profil (`route_nodes`, výchozí 3), první je preferovaný
 
 ### 8.1 Admission na nodu
 
-Klient se připojí na `wss://<hostname>/client` (WebSocket, textové JSON zprávy, max. 64 KiB). Průběh:
+Klient se připojí na `wss://<hostname>/client` (WebSocket). Cloudflare ukončuje TLS, proto se mezi klientem a nodem navazuje vlastní autentizovaný šifrovaný kanál (§14.1). Admission je jeho součástí:
 
-1. Node hned po upgradu pošle `{"t":"hello","node_id":"<node_id>","challenge":"<b64u 32 B>"}`; `challenge` je náhodná a platí jen pro toto spojení.
-2. Klient do `auth_timeout_s` (výchozí 10 s) odpoví `{"t":"auth","ticket":"<ticket>","sig":"<b64u>"}`, kde `sig` je Ed25519 klíčem `ek` přes doménu `ancord/v1/client-auth` a `payload = challenge(32 B) ‖ node_id(UTF-8)`. Ticket sám bez `ek` tedy nestačí, ukradený ticket je bez soukromého klíče k ničemu.
-3. Node ověří ticket (§8: podpis Workeru, `nid`, `exp`), podpis proti `ek` z ticketu a že `n` nebyl použit (jednorázové do `exp`). Při úspěchu odpoví `{"t":"ready"}`, jinak `{"t":"error","reason":"…"}` a zavře spojení kódem `4401`. Bez `auth` do limitu se zavře kódem `4408`.
-4. Po `ready` node odpovídá na `{"t":"ping"}` zprávou `{"t":"pong"}`. Zprávy data plane (`send`, `fetch`, `ack`) jsou v §13.
+1. Klient **před připojením** ověří ticket klíčem Workeru, který má připnutý mimo síť: podpis, `nid` odpovídá `node_id` z trasy, `ek` je jeho klíč, `exp`. Bez toho by trasu mohl podvrhnout kdokoli na cestě.
+2. Node po upgradu pošle `{"t":"hello","node_id":"<node_id>","challenge":"<b64u 32 B>"}`; klient odpoví `init`, node `accept` a od té chvíle je vše šifrované (§14.1).
+3. Klient do `auth_timeout_s` (výchozí 10 s) pošle šifrovaně `{"t":"auth","ticket":"<ticket>","sig":"<b64u>"}`, kde `sig` je Ed25519 klíčem `ek` přes doménu `ancord/v1/chan-client` a `payload = th` (přepis handshaku, §14.1). Podpis váže `ek` k tomuto jedinému spojení; ticket sám bez `ek` nestačí.
+4. Node ověří ticket (§8: podpis Workeru, `nid`, `exp`), podpis proti `ek` z ticketu a že `n` nebyl použit (jednorázové do `exp`). Při úspěchu odpoví `{"t":"ready"}`, jinak `{"t":"error","reason":"…"}` a zavře spojení kódem `4401`. Bez `auth` do limitu se zavře kódem `4408`. Rámec, který nejde ověřit, zavře spojení kódem `4400`.
+5. Po `ready` node odpovídá na `{"t":"ping"}` zprávou `{"t":"pong"}`. Zprávy data plane (`send`, `fetch`, `ack`, `subscribe`) jsou v §13.
 
 Volba nodů: viz `worker/` (power-of-two-choices nad váženým výběrem filtrovaným podle vzdálenosti klienta z `request.cf`). Klienti na pořadí nemají spoléhat nad rámec „první je preferovaný“.
 
@@ -295,6 +298,10 @@ Po `ready` (§8.1). Každý požadavek může nést `rid` (řetězec do 64 znak�
 | `{"t":"send","id","mailbox_id","ts","ct","push_id"?}` | `{"t":"sent","id","acks":n}` | zápis na `r` anchorů, hotovo po `quorum` potvrzeních; volitelné `push_id` příjemce (§10.1) spustí wake (§13.6) |
 | `{"t":"fetch","mailbox_id","limit"}` | `{"t":"messages","mailbox_id","messages":[{"id","ts","ct"}]}` | nedoručené zprávy seřazené podle `(ts, id)` (`ts` má sekundovou přesnost, přesné pořadí určuje číslo `n` v ratchetu, podle něj zprávy řadí klient); `limit` 1–500 (výchozí 100) |
 | `{"t":"ack","mailbox_id","ids":[…]}` | `{"t":"acked","n":k}` | zprávy (nejvýše 500) jsou doručené a anchory je smažou; `n` je počet `ids` v požadavku |
+| `{"t":"subscribe","mailbox_id"}` | `{"t":"subscribed","mailbox_id","anchors":n}` | node se stává gateway mailboxu: oznámí anchorům presence (§13.7); `n` je počet potvrzených anchorů. Nejvýše 32 odběrů na spojení |
+| `{"t":"unsubscribe","mailbox_id"}` | `{"t":"unsubscribed","mailbox_id"}` | zruší odběr a presence |
+
+Po `subscribe` posílá node asynchronně `{"t":"message","mailbox_id","id","ts","ct"}` (bez `rid`), když anchor přepošle novou zprávu (§13.7). Zpráva zůstává na anchorech `pending`, dokud ji klient nepotvrdí `ack`.
 
 Kódy chyb: `bad_request`, `too_large`, `rate_limited` (limit zpráv na spojení), `no_directory` (node ještě nemá adresář), `insufficient_nodes` (adresář má méně nodů než `quorum`), `quorum_unavailable` (anchory neodpověděly v dostatečném počtu), `mailbox_full`.
 
@@ -308,7 +315,7 @@ Kódy chyb: `bad_request`, `too_large`, `rate_limited` (limit zpráv na spojení
 - `403` volající není v adresáři aktuální ani předchozí epochy, nebo příjemce není anchorem `mailbox_id` v aktuální ani předchozí epoše,
 - `413` příliš velké tělo, `400` neplatné tělo.
 
-O jednu epochu napřed bývá odesílatel jen na několik vteřin, příjemce adresář ještě neobdržel a `403` je dočasné. Odesílatel proto `403` zopakuje dvakrát s prodlevou 400 ms (s novým nonce), než ho vyhodnotí jako chybu.
+O jednu epochu napřed bývá odesílatel jen na několik vteřin, příjemce adresář ještě neobdržel a `403` (i při handshaku) je dočasné. Odesílatel proto `403` zopakuje dvakrát s prodlevou 400 ms (s novým nonce), než ho vyhodnotí jako chybu.
 
 | Cesta | Tělo | Odpověď `200` |
 |---|---|---|
@@ -317,6 +324,9 @@ O jednu epochu napřed bývá odesílatel jen na několik vteřin, příjemce ad
 | `/n/ack` | `{"mailbox_id","ids":[…]}` | `{"n":k}` (počet změněných záznamů) |
 
 `put` s existujícím `(mailbox_id, id)` vrací `duplicate` a nemění nic, jen `delivered: true` převede pending záznam na doručený (delivered vyhrává vždy). `ack` vyrobí z neexistující zprávy záznam „doručeno“, takže pozdní `put` zprávu neoživí. Plný mailbox odpoví `507 mailbox_full`.
+
+`POST /n/presence` (gateway → anchor) `{"mailbox_id","exp"}` → `{"ok":true}`: volající je gateway (z podpisu), `exp` je unixový čas konce platnosti (`0` ruší). Příjemce musí být anchorem `mailbox_id`.
+`POST /n/deliver` (anchor → gateway) `{"mailbox_id","id","ts","ct"}` → `{"delivered":bool}`: `403`, pokud volající není anchorem `mailbox_id`. `delivered` je `true`, když zprávu dostal aspoň jeden odběratel (nebo ji gateway už předala, duplicity od dalších anchorů se zahazují).
 
 ### 13.5 Úložiště, TTL, handoff
 - Záznam je `pending` (nese `ct`) nebo `delivered` (jen náhrobek bez `ct`). Oba mají `exp`; po `exp` je smaže úklid. Příjemce si `exp` omezí na `now + message_ttl_s` (výchozí 30 dní), takže handoff ani opakovaný zápis životnost neprodlužují.
@@ -328,4 +338,68 @@ O jednu epochu napřed bývá odesílatel jen na několik vteřin, příjemce ad
 - `push_id` je 52 znaků `[a-z2-7]` (§10.1). Odesílatel ho zná, protože ho odvodí ze sdíleného tajemství mailboxu; koordinující node ho přidá do `/n/put` všem anchorům. Neplatný tvar se odmítne (`bad_request`). `push_id` se neukládá.
 - Anchor, který zprávu **nově uložil** (`stored`, ne `duplicate`, ne náhrobek) a dostal `push_id`, na pozadí pošle Workeru podepsaný `POST /wake` (§10.2) s `{push_id, mailbox_id}`. Odpověď Workeru se na zápis zprávy nijak nepromítá: selhání wake nikdy neshodí `send`.
 - Anchor koaleskuje i sám: pro stejný `push_id` pošle nejvýše jeden wake za `wake_min_interval_s` (výchozí 10 s). Worker koaleskuje znovu (per `push_id`) a limituje per node, takže až `r` souběžných wake od anchorů téže zprávy skončí nejvýš jednou jako push.
-- Průběžné doručování online odběrateli (a tedy vynechání wake, když je odběratel online) tu zatím není: klient čte `fetch`. Wake se proto posílá vždy.
+- Wake se posílá, jen když doručení online nevyšlo (§13.7): anchor nemá platnou presence, gateway nedostupná, nebo gateway odběratele nemá.
+
+### 13.7 Presence a online doručení
+Worker klientovi jen vybere nejbližší nody (§8); anchory si počítají nody. Viz `ARCHITECTURE.md` §6.3.
+- **Presence.** Po `subscribe` gateway spočte anchory mailboxu (§7) a každému pošle `/n/presence` s `exp = now + presence_ttl_s` (výchozí 60 s). `subscribe` skončí po potvrzení `quorum` anchorů; zbylé dobíhají. Gateway presence obnovuje každých `presence_renew_s` (výchozí 20 s), při odpojení klienta ji zruší (`exp = 0`). Anchor ji drží jen v paměti, TTL si omezí na vlastní `presence_ttl_s`, takže po výpadku gateway presence sama zanikne. Po změně epochy ji nové anchory dostanou z nejbližšího obnovení.
+- **Doručení.** Anchor, který zprávu nově uložil (`stored`), při platné presence zavolá `/n/deliver` na gateway, ta ji pošle klientovi po WSS. Anchor běží na pozadí a odeslání (`send`) tím nezdržuje.
+- **Wake.** Když `/n/deliver` vrátí `delivered: false` (a presence se tím zahodí) nebo selže, anchor pošle wake (§13.6), má-li `push_id`.
+- **Spolehlivost.** Doručení je *at least once*. Zpráva zůstává `pending`, dokud klient nepošle `ack`, takže ji nelze ztratit, když spojení mezi předáním a přečtením zanikne. Klient proto po `subscribe` provede `fetch` a duplicity zahazuje podle `id` (ratchet je přijme jen jednou).
+- **Soukromí.** Anchor ví, na kterém nodu je mailbox online, ale `mailbox_id` je blinded; gateway nezná odesílatele.
+
+## 14. Zabezpečený kanál
+
+Cloudflare Tunnel ukončuje TLS na okraji, takže bez další vrstvy by Cloudflare viděl `mailbox_id`, tickety, `push_id` a strukturu provozu. Klient s nodem a nody mezi sebou proto vedou vlastní autentizovaný šifrovaný kanál. Cloudflare pak vidí IP adresy, čas a (zaokrouhlenou) velikost rámců, obsah ne. Žádná operace není dostupná mimo kanál a žádný režim nedegraduje na nešifrovaný.
+
+Primitiva: X25519 (RFC 7748, výstup samých nul se odmítá), HKDF-SHA256 (RFC 5869), SHA-256, Ed25519 (§1.3), ChaCha20-Poly1305 (RFC 8439) mezi klientem a nodem a XChaCha20-Poly1305 (draft-irtf-cfrg-xchacha) mezi nody. Referenční implementace a vektory: `reference/channel.py`, `test-vectors/channel.json`.
+
+**Padding.** Každá otevřená data se před šifrováním zarovnají: `u32be(len) ‖ data ‖ 0x00…` na násobek 256 B (nejméně 256). Příjemce přijme jen kanonický tvar (správná délka, samé nuly).
+
+### 14.1 Klient ↔ node
+Klient zná z trasy `node_id` a ticket, a z konfigurace připnutý klíč Workeru (§8.1 bod 1). Identita nodu se ověřuje takto:
+1. Node → `hello {node_id, challenge}` (text, §8.1).
+2. Klient → `{"t":"init","ce":"<b64u X25519 efemerní veřejný klíč>"}` (text).
+3. Node → `{"t":"accept","ne":"<b64u X25519>","npk":"<b64u Ed25519 identita nodu>","sig":"<b64u>"}` (text), kde
+
+```
+th  = SHA256( "ancord/v1/chan" ‖ 0x00 ‖ challenge(32) ‖ ce(32) ‖ ne(32) ‖ npk(32) ‖ node_id(UTF-8) )
+sig = Ed25519(npk, domain "ancord/v1/chan-node", payload = th)
+```
+Klient odmítne spojení, pokud `node_id ≠ base32(blake3(npk))` (§2; `node_id` pochází z ticketu podepsaného Workerem) nebo `sig` nesedí. Cloudflare tedy nemůže uprostřed podvrhnout vlastní klíč: nezná soukromý klíč nodu a nemůže podvrhnout ani `node_id`, protože ten je v ticketu podepsaném Workerem.
+
+4. Klíče: `shared = X25519(ce, ne)`, `okm = HKDF-SHA256(ikm = shared, salt = th, info = "ancord/v1/chan/keys", L = 64)`, `k_c2n = okm[0..32]`, `k_n2c = okm[32..64]`.
+5. Od teď jsou všechny rámce WebSocket **binární** (textový rámec spojení zavře). Rámec `n` v daném směru je `ChaCha20-Poly1305(key, nonce = 0x00000000 ‖ u64be(n), aad = "ancord/v1/chan/frame" ‖ th, pad(JSON))`. Čítač `n` začíná 0 v každém směru, příjemce vyžaduje přesně další hodnotu (WebSocket je uspořádaný), takže přehrání, vynechání ani prohození rámce neprojde. Při 2^32 rámcích se spojení zavře a naváže se nové. Nonce se tak nikdy neopakuje a každý směr má vlastní klíč.
+6. Klient pošle první rámec `auth` (§8.1 bod 3).
+
+Forward secrecy: oba efemerní klíče se po výpočtu zahodí, kompromitace identity nodu ani Workeru neodhalí starý provoz.
+
+### 14.2 Node ↔ node
+Oba nody jsou v adresáři (podepsaném Workerem), takže každý zná `pubkey` druhého. Session má jednu dvojici klíčů na směr a žije `session_ttl_s = 600` (volající ji obnoví 30 s předem).
+
+**Handshake `POST /n/hs`** – podepsaný request podle §3 (podepisuje volající, tj. iniciátor; nonce `n` je 16 B), tělo `{"ce":"<b64u X25519>"}`. Responder odmítne `401` (podpis), `403` (volající není v adresáři), `409` (replay), `400` (nesmysl, bod malého řádu), `503` (příliš mnoho session). Odpověď `200`:
+
+```
+{"ne":"<b64u X25519>","sid":"<b64u 16 B náhodných>","sig":"<b64u>"}
+th  = SHA256( "ancord/v1/n2n" ‖ 0x00 ‖ ipk(32) ‖ rpk(32) ‖ n(16) ‖ ce(32) ‖ ne(32) ‖ sid(16) )
+sig = Ed25519(rpk, domain "ancord/v1/n2n-resp", payload = th)
+```
+`ipk` je veřejný klíč iniciátora, `rpk` responderu (z adresáře), `n` nonce požadavku. Iniciátor ověří `sig` klíčem `rpk` **z adresáře**; node, který tam není (nebo Cloudflare), odpověď nepodepíše. Klíče: `okm = HKDF-SHA256(ikm = X25519(ce, ne), salt = th, info = "ancord/v1/n2n/keys", L = 64)`, `k_i2r = okm[0..32]`, `k_r2i = okm[32..64]`. Iniciátora prokazuje podpis requestu, který kryje `ce`; klíče odvodí jen držitel soukromého `ce`. Responder drží nejvýše 4096 session, z toho 8 na volajícího (nejstarší se zahazuje).
+
+**Operace `POST /n/x`** – tělo `{"sid":"<b64u>","n":"<b64u 24 B náhodných>","c":"<b64u>"}`:
+
+```
+c = XChaCha20-Poly1305(k_i2r, nonce = n, aad = "ancord/v1/n2n/req" ‖ sid, pad({"op":"put|get|ack|presence|deliver","ts":<t>,"body":{…}}))
+```
+Responder zahodí požadavek, pokud session neexistuje nebo vypršela (`401 unknown_session`, volající ji naváže znovu a zopakuje), šifrový text nejde ověřit (`401`), volající už není v adresáři (`403`), `|now − ts| > 60 s` nebo se dvojice `(sid, n)` už objevila v okně 2 × 60 s (replay, `409`). Odpověď `200`:
+
+```
+{"n":"<b64u 24 B>","c":"<b64u>"}
+c = XChaCha20-Poly1305(k_r2i, nonce = n', aad = "ancord/v1/n2n/res" ‖ sid ‖ n, pad({"status":<HTTP stav>,"body":{…}}))
+```
+Odpověď je vázaná na `n` požadavku, takže ji nelze přiřadit k jinému požadavku. Stavy operací (§13.4) jsou uvnitř; `200` vnějšího HTTP znamená jen „session platí“. Nonce jsou náhodné 192bitové, takže session unese libovolný počet požadavků bez rizika kolize.
+
+### 14.3 Co kanál nekryje
+- IP adresy, čas a hrubá velikost rámců (padding 256 B) jsou Cloudflare vidět; odesílatel a příjemce nejsou před nodem skryti kromě blinded `mailbox_id` (`THREAT_MODEL.md`).
+- Spojení nody ↔ Worker (heartbeat, `/wake`, `/route`) vede přes infrastrukturu Cloudflare z podstaty: Worker je Cloudflare. Vidí `push_id` a u `/wake` i `mailbox_id`; obsah zpráv nikdy.
+- Klient musí mít klíč Workeru připnutý mimo síť (`WORKER_PUBKEY`). Nody ho smějí poprvé stáhnout jen s výslovným `TRUST_WORKER_KEY_ON_FIRST_USE` (vývoj).

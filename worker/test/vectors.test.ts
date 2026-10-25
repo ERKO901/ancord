@@ -9,7 +9,6 @@ import { issueTicket, verifyTicket } from "../src/ticket";
 import { computeCheckpoints, verifyCpu } from "../src/challenge/cpu";
 import { buildTable, buildTree, spaceT0, verifyOpenings } from "../src/challenge/space";
 import { pushIdOf } from "../src/push/handler";
-import clientAuthVec from "../../spec/test-vectors/client-auth.json";
 import canonicalVec from "../../spec/test-vectors/canonical-json.json";
 import directoryVec from "../../spec/test-vectors/directory.json";
 import hashchainVec from "../../spec/test-vectors/hashchain.json";
@@ -89,13 +88,6 @@ describe("sdílené testovací vektory (spec/test-vectors)", () => {
     expect(ids).toEqual([...ids].sort());
   });
 
-  it("client-auth: podpis ek přes challenge a node_id", async () => {
-    const signer = await signerFromSeed(clientAuthVec.client_seed);
-    const payload = concat(dec(clientAuthVec.challenge, 32), utf8(clientAuthVec.node_id));
-    expect(b64uEncode(await signer.sign(DOMAIN.clientAuth, payload))).toBe(clientAuthVec.signature);
-    expect(b64uEncode(signer.publicKey)).toBe(clientAuthVec.ek);
-    expect(await verifySig(dec(clientAuthVec.ek, 32), DOMAIN.clientAuth, payload, dec(clientAuthVec.signature, 64))).toBe(true);
-  });
   it("ticket: přesný řetězec, ověření a expirace", async () => {
     const signer = await signerFromSeed(ticketVec.worker_seed);
     const t = await issueTicket(signer, ticketVec.node_id, ticketVec.ek, ticketVec.exp, dec(ticketVec.nonce, 16));

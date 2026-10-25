@@ -9,6 +9,8 @@ use crate::challenge::space::SpaceTable;
 use crate::config::Config;
 use crate::error::NodeError;
 use crate::identity::Identity;
+use crate::peer::InSessions;
+use crate::presence::{PresenceEntry, Subscribers};
 use crate::store::Store;
 use crate::sysinfo::LoadMeter;
 use crate::ticket::{DirectoryBody, TicketGuard};
@@ -41,6 +43,16 @@ pub struct NodeState {
     pub worker: WorkerClient,
     /// Kdy se naposledy poslal wake pro dané `push_id` (lokální koalescence).
     pub wake_last: Mutex<HashMap<String, u64>>,
+    /// Presence mailboxů, které tento node drží jako anchor: kde je příjemce online (jen v paměti, spec §13.7).
+    pub presence: Mutex<HashMap<[u8; 32], PresenceEntry>>,
+    /// Odběratelé z připojených klientů: tento node je jejich gateway.
+    pub subscribers: Mutex<HashMap<[u8; 32], Subscribers>>,
+    /// Čítač spojení klientů (identifikace odběratelů).
+    pub next_conn: AtomicU64,
+    /// Session node↔node, které tento node drží jako responder (`/n/hs`).
+    pub n2n_in: InSessions,
+    /// Session node↔node, které tento node otevřel jako iniciátor.
+    pub n2n_out: crate::n2n::OutSessions,
 }
 
 impl NodeState {
@@ -70,6 +82,11 @@ impl NodeState {
             hostname: RwLock::new(None),
             worker,
             wake_last: Mutex::new(HashMap::new()),
+            presence: Mutex::new(HashMap::new()),
+            subscribers: Mutex::new(HashMap::new()),
+            next_conn: AtomicU64::new(0),
+            n2n_in: Mutex::default(),
+            n2n_out: Mutex::default(),
         }))
     }
 
