@@ -142,7 +142,7 @@ async function main() {
   else if (!existing.has("CF_API_TOKEN"))
     console.warn(
       "varování: chybí ANCORD_RUNTIME_CF_TOKEN (užší token Workeru: Account → Cloudflare Tunnel Edit, Zone → DNS Edit); " +
-        "Worker poběží, ale registrace nodů selže, dokud se nenastaví (`wrangler secret put CF_API_TOKEN -c wrangler.production.json`)",
+        "Worker poběží, ale registrace nodů selže, dokud se nenastaví (`wrangler secret put CF_API_TOKEN --name ancord`)",
     );
   const genesisFile = process.env.ANCORD_GENESIS_FILE;
   if (genesisFile) {
