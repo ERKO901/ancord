@@ -65,7 +65,7 @@ Náhodný klíč: `head -c 32 /dev/urandom | basenc --base64url | tr -d '='`.
 |---|---|
 | `CLOUDFLARE_API_TOKEN` | token pro nasazení. Účet: Workers Scripts, Workers KV Storage, Workers R2 Storage, Queues (Edit). Zóna `melonet.cz`: Zone Read, DNS Edit, Workers Routes Edit, Transform Rules Edit |
 | `CLOUDFLARE_ACCOUNT_ID` | volitelné, jinak jediný účet tokenu |
-| `ANCORD_RUNTIME_CF_TOKEN` | užší token, se kterým Worker za běhu vytváří tunely a DNS nodů (`CF_API_TOKEN`). Účet: Cloudflare Tunnel Edit. Zóna `melonet.cz`: DNS Edit. Povinný při prvním nasazení |
+| `ANCORD_RUNTIME_CF_TOKEN` | užší token, se kterým Worker za běhu vytváří tunely a DNS nodů (`CF_API_TOKEN`). Účet: Cloudflare Tunnel Edit. Zóna `melonet.cz`: DNS Edit. Bez něj Worker běží, ale registrace nodů selže; lze doplnit později (`npx wrangler secret put CF_API_TOKEN -c wrangler.production.json`) |
 | `ANCORD_GENESIS_FILE` | `../dev/genesis.txt` z `dev/bootstrap.sh`; `GENESIS_NODE_IDS` je tajemství, takže se mění bez úpravy konfigurace |
 | `ANCORD_PROFILE` | profil, výchozí `prod` |
 | `ANCORD_PUSH_MODE` | `log` (výchozí) nebo `real` (pak je třeba nahrát FCM/APNs tajemství přes `wrangler secret put -c wrangler.production.json`) |

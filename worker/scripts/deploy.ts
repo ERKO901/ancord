@@ -7,7 +7,7 @@
  * Vstupy (proměnné prostředí, hodnoty se nikdy nevypisují):
  *   CLOUDFLARE_API_TOKEN      token pro nasazení (wrangler)
  *   CLOUDFLARE_ACCOUNT_ID     volitelné; bez něj se použije jediný účet, který token vidí
- *   ANCORD_RUNTIME_CF_TOKEN   užší token Workeru (Tunnel Edit + DNS Edit jen pro zónu); povinný při prvním nasazení
+ *   ANCORD_RUNTIME_CF_TOKEN   užší token Workeru (Tunnel Edit + DNS Edit jen pro zónu); bez něj nejde registrovat nody
  *   ANCORD_GENESIS_FILE       soubor s node_id genesis nodů (jedno na řádek, `dev/genesis.txt`); bez něj se seznam nemění
  *   ANCORD_PROFILE            profil (výchozí prod)
  *   ANCORD_ADMIN_TOKEN_FILE   kam uložit vygenerovaný ADMIN_TOKEN (výchozí ~/.config/ancord/admin-token, práva 0600)
@@ -139,7 +139,11 @@ async function main() {
   for (const name of GENERATED_SECRETS) if (!existing.has(name)) secrets[name] = randomKey();
   const runtimeToken = process.env.ANCORD_RUNTIME_CF_TOKEN;
   if (runtimeToken) secrets.CF_API_TOKEN = runtimeToken;
-  else if (!existing.has("CF_API_TOKEN")) blockers.push("chybí ANCORD_RUNTIME_CF_TOKEN (užší token Workeru: Account → Cloudflare Tunnel Edit, Zone → DNS Edit)");
+  else if (!existing.has("CF_API_TOKEN"))
+    console.warn(
+      "varování: chybí ANCORD_RUNTIME_CF_TOKEN (užší token Workeru: Account → Cloudflare Tunnel Edit, Zone → DNS Edit); " +
+        "Worker poběží, ale registrace nodů selže, dokud se nenastaví (`wrangler secret put CF_API_TOKEN -c wrangler.production.json`)",
+    );
   const genesisFile = process.env.ANCORD_GENESIS_FILE;
   if (genesisFile) {
     const ids = readFileSync(genesisFile, "utf8").split(/\s+/).filter(Boolean);
