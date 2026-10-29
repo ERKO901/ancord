@@ -31,15 +31,18 @@ interface ApiEnvelope<T> {
 
 export class RealCloudflareClient implements CloudflareClient {
   private static readonly API = "https://api.cloudflare.com/client/v4";
+  private readonly fetcher: typeof fetch;
 
   constructor(
     private readonly token: string,
     private readonly accountId: string,
     private readonly zoneId: string,
     private readonly zone: string,
-    private readonly fetcher: typeof fetch = fetch,
+    fetcher: typeof fetch = fetch,
   ) {
     if (!token || !accountId || !zoneId) throw new Error("Cloudflare client is not configured");
+    // globální fetch nesmí být volaný jako metoda objektu (workerd: „Illegal invocation“)
+    this.fetcher = (input, init) => fetcher(input, init);
   }
 
   private async call<T>(method: string, path: string, body?: unknown, okStatuses: number[] = []): Promise<T | null> {

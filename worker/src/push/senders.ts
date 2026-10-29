@@ -37,12 +37,16 @@ interface CachedToken {
 export class RealPushSender implements PushSender {
   private fcmToken: CachedToken | null = null;
   private apnsToken: CachedToken | null = null;
+  private readonly fetcher: typeof fetch;
 
   constructor(
     private readonly env: Env,
-    private readonly fetcher: typeof fetch = fetch,
+    fetcher: typeof fetch = fetch,
     private readonly nowMs: () => number = Date.now,
-  ) {}
+  ) {
+    // globální fetch nesmí být volaný jako metoda objektu (workerd: „Illegal invocation“)
+    this.fetcher = (input, init) => fetcher(input, init);
+  }
 
   async send(platform: Platform, token: string): Promise<SendResult> {
     try {

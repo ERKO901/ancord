@@ -329,10 +329,12 @@ describe("odesílatelé FCM a APNs", () => {
 
   function recorder(handler: (url: string, init: RequestInit) => Response) {
     const calls: { url: string; init: RequestInit }[] = [];
-    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    // jako globální fetch ve workerd: volání s cizím `this` (metoda objektu) je „Illegal invocation“
+    const fetcher = async function (this: unknown, input: RequestInfo | URL, init?: RequestInit) {
+      if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation");
       calls.push({ url: String(input), init: init ?? {} });
       return handler(String(input), init ?? {});
-    }) as typeof fetch;
+    } as typeof fetch;
     return { fetcher, calls };
   }
 

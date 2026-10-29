@@ -285,13 +285,15 @@ describe("registrace (A1)", () => {
 describe("CloudflareClient (bezpečnost sdílené zóny)", () => {
   function fakeApi(handlers: (method: string, url: string, body: any) => { status?: number; result: unknown }) {
     const calls: { method: string; url: string; body: any }[] = [];
-    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    // jako globální fetch ve workerd: volání s cizím `this` (metoda objektu) je „Illegal invocation“
+    const fetcher = async function (this: unknown, input: RequestInfo | URL, init?: RequestInit) {
+      if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation");
       const url = String(input);
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       calls.push({ method: init?.method ?? "GET", url, body });
       const h = handlers(init?.method ?? "GET", url, body);
       return new Response(JSON.stringify({ success: true, result: h.result }), { status: h.status ?? 200 });
-    }) as typeof fetch;
+    } as typeof fetch;
     return { fetcher, calls };
   }
   const host = "node-abcdefghijklmnop.melonet.cz";
