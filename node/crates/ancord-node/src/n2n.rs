@@ -36,7 +36,7 @@ enum Exchange {
     UnknownSession,
 }
 
-fn url(st: &NodeState, node: &DirectoryNode, path: &str) -> String {
+pub(crate) fn url(st: &NodeState, node: &DirectoryNode, path: &str) -> String {
     format!("{}{path}", st.cfg.peer_url_template.replace("{host}", &node.host))
 }
 
@@ -135,7 +135,15 @@ async fn exchange(st: &NodeState, node: &DirectoryNode, session: &OutSession, op
 
 /// Zavolá operaci `op` (`put`, `get`, `ack`, `presence`, `deliver`) na jiném nodu. Vrací stav a tělo odpovědi.
 /// Session se naváže nebo obnoví sama; chybějící session u responderu (restart) se zopakuje jednou.
+/// Výsledek se započte do dosažitelnosti peeru (spec §6.1).
 pub async fn call(st: &NodeState, node: &DirectoryNode, op: &str, body: &Value) -> Result<(u16, Value), String> {
+    let result = call_once(st, node, op, body).await;
+    let ok = matches!(&result, Ok((status, _)) if !crate::reach::is_transport_status(*status));
+    st.reach.record(&node.id, ok, unix_now());
+    result
+}
+
+async fn call_once(st: &NodeState, node: &DirectoryNode, op: &str, body: &Value) -> Result<(u16, Value), String> {
     for _ in 0..2 {
         let session = match session_for(st, node).await? {
             Established::Session(s) => s,

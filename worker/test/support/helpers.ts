@@ -1,7 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { sharedMockClient } from "../../src/cloudflare";
-import { withOverrides } from "../../src/config";
+import { loadConfig, withOverrides } from "../../src/config";
 import type { Registry } from "../../src/registry/registry";
 import { clock } from "../../src/clock";
 import { resetRouteCache } from "../../src/index";
@@ -61,7 +61,20 @@ export async function alignToEpoch(epochSeconds: number, intoEpochS = 5, epochsA
   return targetStart / epochSeconds;
 }
 
-const TABLES = ["nodes", "reg_challenges", "reg_log", "nonces", "directories", "schedule", "challenges", "space", "asn_penalties", "meta"];
+const TABLES = [
+  "nodes",
+  "reg_challenges",
+  "reg_log",
+  "nonces",
+  "directories",
+  "schedule",
+  "challenges",
+  "space",
+  "asn_penalties",
+  "meta",
+  "reach_reports",
+  "reach",
+];
 
 /** Vyčistí stav mezi testy (úložiště DO ani KV se mezi testy spolehlivě neodvrací, když zůstanou otevřené WebSockety). */
 export async function resetState(): Promise<void> {
@@ -88,6 +101,10 @@ export async function setup(patch: Parameters<typeof withOverrides>[1] = FAST): 
   sharedMockClient().calls.length = 0;
   await setTimeOffset(0);
   await resetState();
+  // vždy od konfigurace profilu: úpravy z předchozího testu se nesmí přenést
+  await withRegistry((r) => {
+    r.cfg = loadConfig(env);
+  });
   await configure(patch);
   await withRegistry((r) => {
     r.fetchImpl = async (input: RequestInfo | URL) => {
@@ -95,6 +112,7 @@ export async function setup(patch: Parameters<typeof withOverrides>[1] = FAST): 
       const host = new URL(url).hostname;
       const node = knownNodes.get(host);
       if (node && url.includes("/.well-known/melo-proof")) return node.proofResponse(url);
+      if (node && new URL(url).pathname === "/health") return node.reachable ? Response.json({ ok: true }) : new Response("tunnel down", { status: 530 });
       return new Response("no such host", { status: 502 });
     };
   });

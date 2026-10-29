@@ -1,7 +1,7 @@
-node_modules/
-target/
-dist/
-.wrangler/
-dev/data/
-*.lock
-package-lock.json
+# konfigurace a manifesty tvoří v grafu šum (uzly compilerOptions, scripts…), kód i dokumenty zůstávají
+worker/package.json
+worker/tsconfig.json
+worker/vitest.config.*
+worker/wrangler*.json*
+node/Cargo.toml
+node/crates/*/Cargo.toml

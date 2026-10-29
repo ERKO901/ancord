@@ -150,6 +150,22 @@ const MIGRATIONS: string[] = [
 
   CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `,
+  `
+  CREATE TABLE reach_reports (
+    target_id TEXT NOT NULL,
+    reporter_id TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (target_id, reporter_id)
+  );
+  CREATE INDEX reach_reports_at ON reach_reports (at);
+
+  CREATE TABLE reach (
+    node_id TEXT PRIMARY KEY,
+    fails INTEGER NOT NULL DEFAULT 0,
+    excluded INTEGER NOT NULL DEFAULT 0,
+    probed_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 export function migrate(sql: SqlStorage): void {

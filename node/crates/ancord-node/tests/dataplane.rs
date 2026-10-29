@@ -37,6 +37,10 @@ async fn spawn_node() -> TestNode {
 }
 
 async fn spawn_node_with_worker(worker_url: &str) -> TestNode {
+    spawn_node_full(worker_url, [0; 32]).await
+}
+
+async fn spawn_node_full(worker_url: &str, worker_key: [u8; 32]) -> TestNode {
     let dir = tempfile::tempdir().unwrap();
     let identity = Identity::load_or_create(dir.path()).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -53,7 +57,7 @@ async fn spawn_node_with_worker(worker_url: &str) -> TestNode {
         "--peer-timeout-s",
         "2",
     ]);
-    let state = NodeState::new(cfg, identity, [0; 32]).unwrap();
+    let state = NodeState::new(cfg, identity, worker_key).unwrap();
     let app = server::router(state.clone());
     let server = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
@@ -768,4 +772,74 @@ async fn profile_handoff_moves_profiles_to_new_anchors() {
         }
     }
     assert_eq!(profile::get(&nodes[3].state, alice.pk()).await.unwrap(), p);
+}
+
+/* ------------------------------------------------- dosažitelnost a adresář od peera (spec §6.1) */
+
+/// Obálka adresáře podepsaná „Workerem“ (klíč z testu).
+fn signed_directory(worker: &Identity, dir: &DirectoryBody) -> Value {
+    let body = serde_json::to_value(dir).unwrap();
+    let sig = worker.sign(ancord_node::sign::DOMAIN_DIRECTORY, &ancord_node::canonical::canonical_bytes(&body).unwrap());
+    json!({"body": body, "sig": b64u_encode(&sig), "kid": "test"})
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn node_behind_on_epoch_pulls_directory_from_peer_after_403() {
+    let wdir = tempfile::tempdir().unwrap();
+    let worker = Identity::load_or_create(wdir.path()).unwrap();
+    let mut nodes = Vec::new();
+    for _ in 0..6 {
+        nodes.push(spawn_node_full("http://127.0.0.1:1", worker.pubkey()).await);
+    }
+    let refs: Vec<&TestNode> = nodes.iter().collect();
+    let envelopes: Vec<Value> = (1..=3).map(|e| signed_directory(&worker, &directory(e, &refs))).collect();
+    for n in &nodes {
+        assert_eq!(n.state.accept_directory(&envelopes[0]), Some(1));
+    }
+    // podvržený adresář se nepřevezme
+    let mut forged = envelopes[2].clone();
+    forged["body"]["epoch"] = json!(8);
+    assert_eq!(nodes[0].state.accept_directory(&forged), None);
+
+    // ostatní dostali epochy 2 a 3, node 0 ne (Worker vypadl uprostřed rozesílání)
+    for n in &nodes[1..] {
+        n.state.accept_directory(&envelopes[1]);
+        n.state.accept_directory(&envelopes[2]);
+    }
+    let dirs: Vec<DirectoryBody> = (1..=3).map(|e| directory(e, &refs)).collect();
+    // mailbox, kde aspoň dva anchory epochy 1 už anchory nejsou (odmítnou 403), takže bez nového adresáře zápis neprojde
+    let mailbox = (0u8..=255)
+        .map(|b| [b; 32])
+        .find(|m| {
+            let later: Vec<String> = [anchors_of(&dirs[1], m), anchors_of(&dirs[2], m)].concat();
+            anchors_of(&dirs[0], m).iter().filter(|a| !later.contains(a)).count() >= 2
+        })
+        .unwrap();
+    let first = data::send(&nodes[0].state, mailbox, [9; 16], unix_now(), b"x".to_vec()).await;
+    assert_eq!(first, Err(DataError::QuorumUnavailable));
+    assert_eq!(nodes[0].state.epoch(), Some(3), "node 0 must have taken the newest directory from a peer");
+    data::send(&nodes[0].state, mailbox, [9; 16], unix_now(), b"x".to_vec()).await.unwrap();
+    // peer vydává adresář jen v podepsané podobě, jak ho dostal
+    let res = reqwest::get(format!("http://{}/n/directory", nodes[1].host)).await.unwrap();
+    assert_eq!(res.json::<Value>().await.unwrap(), envelopes[2]);
+}
+
+#[test]
+fn unreachable_peers_are_reported_after_repeated_failures_and_forgotten_after_success() {
+    let r = ancord_node::reach::Reach::default();
+    r.record("b", false, 100);
+    r.record("b", false, 101);
+    assert!(r.unreachable(101, 3, 120).is_empty());
+    r.record("b", false, 102);
+    r.record("a", false, 102);
+    assert_eq!(r.unreachable(102, 3, 120), vec!["b".to_owned()]);
+    // okno vypršelo
+    assert!(r.unreachable(300, 3, 120).is_empty());
+    for t in 400..403 {
+        r.record("c", false, t);
+    }
+    r.record("c", true, 404);
+    assert!(r.unreachable(404, 3, 120).is_empty());
+    assert!(ancord_node::reach::is_transport_status(530));
+    assert!(!ancord_node::reach::is_transport_status(403));
 }

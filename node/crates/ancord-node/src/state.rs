@@ -24,6 +24,8 @@ pub struct NodeState {
     pub identity: Identity,
     pub worker_key: [u8; 32],
     pub directory: RwLock<Option<Arc<DirectoryBody>>>,
+    /// Podepsaná obálka aktuálního adresáře, jak ji poslal Worker (předává se peerům, spec §6.1).
+    pub directory_envelope: RwLock<Option<Arc<serde_json::Value>>>,
     /// Adresář předchozí epochy: peeři s ním ještě mohou počítat anchory (spec §13.4).
     pub prev_directory: RwLock<Option<Arc<DirectoryBody>>>,
     /// Mailboxy, které tento node drží jako anchor.
@@ -58,6 +60,8 @@ pub struct NodeState {
     pub n2n_in: InSessions,
     /// Session node↔node, které tento node otevřel jako iniciátor.
     pub n2n_out: crate::n2n::OutSessions,
+    /// Neúspěšná volání peerů pro hlášení v heartbeatu (spec §6.1).
+    pub reach: crate::reach::Reach,
 }
 
 impl NodeState {
@@ -75,6 +79,7 @@ impl NodeState {
             identity,
             worker_key,
             directory: RwLock::new(None),
+            directory_envelope: RwLock::new(None),
             prev_directory: RwLock::new(None),
             store,
             peer_http,
@@ -93,6 +98,7 @@ impl NodeState {
             next_conn: AtomicU64::new(0),
             n2n_in: Mutex::default(),
             n2n_out: Mutex::default(),
+            reach: crate::reach::Reach::default(),
         }))
     }
 
@@ -123,6 +129,23 @@ impl NodeState {
             *prev = old;
         }
         true
+    }
+
+    /// Ověří podpis obálky adresáře klíčem Workeru a převezme ji, je-li novější. Vrací novou epochu.
+    pub fn accept_directory(&self, envelope: &serde_json::Value) -> Option<u64> {
+        let dir = crate::ticket::verify_directory(&self.worker_key, envelope)?;
+        let epoch = dir.epoch;
+        if !self.set_directory(dir) {
+            return None;
+        }
+        if let Ok(mut slot) = self.directory_envelope.write() {
+            *slot = Some(Arc::new(envelope.clone()));
+        }
+        Some(epoch)
+    }
+
+    pub fn directory_envelope(&self) -> Option<Arc<serde_json::Value>> {
+        self.directory_envelope.read().ok().and_then(|d| d.clone())
     }
 
     pub fn prev_directory(&self) -> Option<Arc<DirectoryBody>> {

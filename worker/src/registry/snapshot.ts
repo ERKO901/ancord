@@ -5,6 +5,7 @@ import { all, getMeta, setMeta, type NodeRow } from "./store";
 import { epochOf, type SignedDirectory } from "./directory";
 import { scoreOf } from "./scoring";
 import type { RegCtx } from "./context";
+import { excludedIds } from "./reach";
 
 export const KV_SNAPSHOT = "routing:snapshot";
 export const KV_DIRECTORY = "directory:current";
@@ -24,8 +25,11 @@ const round3 = (x: number) => Math.round(x * 1000) / 1000;
 export function buildSnapshotNodes(ctx: RegCtx): SnapshotNode[] {
   const nowS = ctx.nowS();
   const rows = all<NodeRow & Record<string, SqlStorageValue>>(ctx.sql, "SELECT * FROM nodes WHERE status = 'active' ORDER BY node_id");
+  // nedosažitelný node by klient nepřipojil (spec §6.1)
+  const excluded = excludedIds(ctx);
   const out: SnapshotNode[] = [];
   for (const r of rows) {
+    if (excluded.has(r.node_id)) continue;
     const sc = scoreOf(ctx.cfg, r, nowS);
     if (sc.base <= 0) continue;
     out.push({

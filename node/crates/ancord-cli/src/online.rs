@@ -39,6 +39,8 @@ pub struct Online {
     pub keys: UserKeys,
     pub conversations: Vec<Session>,
     pow_bits: u32,
+    /// Obtížnost razítka do vlastní schránky (stráž, spec §15.13).
+    pub inbox_bits: u8,
     /// Konverzace, jejichž mailbox odebírá aktuální spojení.
     watched: Vec<bool>,
 }
@@ -46,7 +48,7 @@ pub struct Online {
 impl Online {
     pub fn new(keys: UserKeys, conversations: Vec<Session>, pow_bits: u32) -> Self {
         let watched = vec![false; conversations.len()];
-        Self { keys, conversations, pow_bits, watched }
+        Self { keys, conversations, pow_bits, inbox_bits: crate::INBOX_POW_BITS, watched }
     }
 
     fn inbox(&self) -> [u8; 32] {
@@ -61,6 +63,7 @@ impl Online {
             store.save_keys(&self.keys)?;
         }
         publish_profile(ws, &self.keys, self.pow_bits).await?;
+        crate::publish_guard(ws, &self.keys, self.inbox_bits).await?;
         self.watched = vec![false; self.conversations.len()];
         let mut ids = vec![b64u_encode(&self.inbox())];
         let mut skipped = Vec::new();
@@ -130,10 +133,10 @@ impl Online {
         let Some((id, ct)) = frame["id"].as_str().and_then(b64u_decode_array::<16>).zip(frame["ct"].as_str()) else { return Ok(Vec::new()) };
         let session = &mut self.conversations[index];
         let Ok(plain) = session.ratchet.open(&id, ct) else { return Ok(Vec::new()) };
-        session.record(false, &id, &plain);
+        let shown = session.accept(&id, &plain);
         store.save_conversation(index, session)?;
         rpc(ws, json!({"t": "ack", "mailbox_id": b64u_encode(&session.inbox()), "ids": [b64u_encode(&id)]})).await?;
-        Ok(vec![OnlineEvent::Message { index, text: plain }])
+        Ok(if shown { vec![OnlineEvent::Message { index, text: plain }] } else { Vec::new() })
     }
 
     /// Vyzvedne všechny čekající zprávy konverzace, dešifruje je v pořadí, uloží stav a potvrdí je.
@@ -152,11 +155,9 @@ impl Online {
             return Ok(Vec::new());
         }
         opened.sort_by_key(|(n, _, _)| *n);
-        for (_, id, plain) in &opened {
-            session.record(false, id, plain);
-        }
-        store.save_conversation(index, session)?;
         let ids: Vec<String> = opened.iter().map(|(_, id, _)| b64u_encode(id)).collect();
+        opened.retain(|(_, id, plain)| session.accept(id, plain));
+        store.save_conversation(index, session)?;
         rpc(ws, json!({"t": "ack", "mailbox_id": b64u_encode(&mailbox), "ids": ids})).await?;
         Ok(opened.into_iter().map(|(_, _, text)| OnlineEvent::Message { index, text }).collect())
     }
@@ -202,6 +203,19 @@ impl Online {
             }
         }
         Ok(events)
+    }
+
+    /// Pošle keepalive do konverzací, kde přijatá zpráva čeká na odpověď déle než `KEEPALIVE_DELAY_S` (spec §13.2).
+    /// Volá se pravidelně, např. při nečinnosti spojení. Vrací počet odeslaných.
+    pub async fn keepalives(&mut self, ws: &mut NodeSocket, store: &mut impl Persist) -> Result<usize, CliError> {
+        let mut sent = 0;
+        for index in 0..self.conversations.len() {
+            let session = &mut self.conversations[index];
+            if crate::keepalive_if_due(ws, session, crate::KEEPALIVE_DELAY_S, |s| store.save_conversation(index, s)).await? {
+                sent += 1;
+            }
+        }
+        Ok(sent)
     }
 
     /// Zašifruje a odešle zprávu do konverzace `index`. Stav ratchetu se uloží před odesláním.

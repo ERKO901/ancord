@@ -9,14 +9,19 @@ export function spaceT0(seed: Uint8Array): Uint8Array {
   return sha256(concat(D0, seed));
 }
 
-/** j(i) = u64_le(T[i−1][0..8]) mod i */
-export function refIndex(prev: Uint8Array, i: number): number {
-  const v = new DataView(prev.buffer, prev.byteOffset, 8).getBigUint64(0, true);
-  return Number(v % BigInt(i));
+/** Počet odkazů na dřívější bloky; víc odkazů prodraží dopočítávání chybějících bloků (ARCHITECTURE.md §9 bod 3). */
+export const REFS = 4;
+
+/** j_m(i) = u64_le(T[i−1][8m..8m+8]) mod i pro m ∈ [0, REFS) */
+export function refIndices(prev: Uint8Array, i: number): number[] {
+  const view = new DataView(prev.buffer, prev.byteOffset, prev.byteLength);
+  const out: number[] = [];
+  for (let m = 0; m < REFS; m++) out.push(Number(view.getBigUint64(8 * m, true) % BigInt(i)));
+  return out;
 }
 
-export function spaceT(seed: Uint8Array, i: number, prev: Uint8Array, ref: Uint8Array): Uint8Array {
-  return sha256(concat(DI, seed, u64le(i), prev, ref));
+export function spaceT(seed: Uint8Array, i: number, prev: Uint8Array, refs: Uint8Array[]): Uint8Array {
+  return sha256(concat(DI, seed, u64le(i), prev, ...refs));
 }
 
 export function leafHash(t: Uint8Array): Uint8Array {
@@ -41,8 +46,8 @@ export function buildTable(seed: Uint8Array, leaves: number): Uint8Array {
   table.set(spaceT0(seed), 0);
   for (let i = 1; i < leaves; i++) {
     const prev = table.subarray((i - 1) * LEAF_BYTES, i * LEAF_BYTES);
-    const j = refIndex(prev, i);
-    table.set(spaceT(seed, i, prev, table.subarray(j * LEAF_BYTES, (j + 1) * LEAF_BYTES)), i * LEAF_BYTES);
+    const refs = refIndices(prev, i).map((j) => table.subarray(j * LEAF_BYTES, (j + 1) * LEAF_BYTES));
+    table.set(spaceT(seed, i, prev, refs), i * LEAF_BYTES);
   }
   return table;
 }
@@ -89,14 +94,15 @@ export interface Opening {
   path: string[];
   prev: string;
   prev_path: string[];
-  ref: string;
-  ref_path: string[];
+  /** T[j_m(i)] pro m = 0…REFS−1, ve stejném pořadí cesty. */
+  refs: string[];
+  ref_paths: string[][];
 }
 
 /** Referenční odpověď na otevření (node a testy). */
 export function makeOpening(seed: Uint8Array, table: Uint8Array, levels: Uint8Array[][], i: number): Opening {
   const at = (k: number) => table.subarray(k * LEAF_BYTES, (k + 1) * LEAF_BYTES);
-  const j = refIndex(at(i - 1), i);
+  const js = refIndices(at(i - 1), i);
   const enc = (p: Uint8Array[]) => p.map(b64uEncode);
   void seed;
   return {
@@ -105,8 +111,8 @@ export function makeOpening(seed: Uint8Array, table: Uint8Array, levels: Uint8Ar
     path: enc(merklePath(levels, i)),
     prev: b64uEncode(at(i - 1)),
     prev_path: enc(merklePath(levels, i - 1)),
-    ref: b64uEncode(at(j)),
-    ref_path: enc(merklePath(levels, j)),
+    refs: js.map((j) => b64uEncode(at(j))),
+    ref_paths: js.map((j) => enc(merklePath(levels, j))),
   };
 }
 
@@ -143,18 +149,25 @@ export function verifyOpenings(
     if (!o || typeof o !== "object" || o.i !== i) return { ok: false, reason: "opening order mismatch" };
     const leaf = decodeBytes(o.leaf, 32);
     const prev = decodeBytes(o.prev, 32);
-    const ref = decodeBytes(o.ref, 32);
     const path = decodePath(o.path, depth);
     const prevPath = decodePath(o.prev_path, depth);
-    const refPath = decodePath(o.ref_path, depth);
-    if (!leaf || !prev || !ref || !path || !prevPath || !refPath) return { ok: false, reason: "malformed opening" };
-    const j = refIndex(prev, i);
+    if (!leaf || !prev || !path || !prevPath) return { ok: false, reason: "malformed opening" };
+    if (!Array.isArray(o.refs) || !Array.isArray(o.ref_paths) || o.refs.length !== REFS || o.ref_paths.length !== REFS) {
+      return { ok: false, reason: "malformed opening" };
+    }
+    const refs = o.refs.map((r) => decodeBytes(r, 32));
+    const refPaths = o.ref_paths.map((p) => decodePath(p, depth));
+    if (refs.some((r) => !r) || refPaths.some((p) => !p)) return { ok: false, reason: "malformed opening" };
     if (!verifyPath(root, i, leaf, path, leaves)) return { ok: false, reason: `bad path for leaf ${i}` };
     if (!verifyPath(root, i - 1, prev, prevPath, leaves)) return { ok: false, reason: `bad path for prev of ${i}` };
-    if (!verifyPath(root, j, ref, refPath, leaves)) return { ok: false, reason: `bad path for ref of ${i}` };
     if (i - 1 === 0 && !timingSafeEqual(prev, spaceT0(seed))) return { ok: false, reason: "T[0] mismatch" };
-    if (j === 0 && !timingSafeEqual(ref, spaceT0(seed))) return { ok: false, reason: "T[0] mismatch" };
-    if (!timingSafeEqual(spaceT(seed, i, prev, ref), leaf)) return { ok: false, reason: `T[${i}] inconsistent` };
+    const js = refIndices(prev, i);
+    for (let m = 0; m < REFS; m++) {
+      const j = js[m]!;
+      if (!verifyPath(root, j, refs[m]!, refPaths[m]!, leaves)) return { ok: false, reason: `bad path for ref ${m} of ${i}` };
+      if (j === 0 && !timingSafeEqual(refs[m]!, spaceT0(seed))) return { ok: false, reason: "T[0] mismatch" };
+    }
+    if (!timingSafeEqual(spaceT(seed, i, prev, refs as Uint8Array[]), leaf)) return { ok: false, reason: `T[${i}] inconsistent` };
   }
   return { ok: true };
 }

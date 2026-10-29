@@ -155,11 +155,12 @@ Textová zpráva `ping` (bez JSON) obslouží runtime Workeru odpovědí `pong` 
  "load":{"conns":12,"max_conns":2000,"cpu_pct":8,"mem_pct":31},
  "sig":"<b64u>"}
 ```
+Volitelné `"unreachable":["<node_id>",…]` (nejvýše 16, seřazené) jsou peeři, na které se node opakovaně nedovolal (§6.1); bez nedosažitelných peerů pole chybí.
 `sig` = Ed25519 přes doménu `ancord/v1/heartbeat` a `payload = kanonické JSON zprávy bez pole sig`. `seq` musí striktně růst v rámci jednoho spojení (po připojení Worker čítač vynuluje, první heartbeat může mít `seq = 0`), `|now − ts| ≤ 60 s`. `epoch` je poslední adresář, který node drží (nepovinné). Je-li starší, nebo chybí (node po startu žádný nedrží), Worker pošle `directory`. Interval určuje profil (`heartbeat_interval_s`).
 
 ## 6. Adresář a epochy
 
-`epoch = floor(unix / epoch_seconds)`. Adresář epochy `E` se sestaví **jednou**, při prvním přístupu v epoše, z nodů ve stavu `active`, zabanované a neaktivní (poslední heartbeat starší než `heartbeat_timeout_s`) se vynechají. Je neměnný po celou epochu, takže všichni dostanou stejný adresář. Odpojení nodu se tedy projeví až v další epoše.
+`epoch = floor(unix / epoch_seconds)`. Adresář epochy `E` se sestaví **jednou**, při prvním přístupu v epoše, z nodů ve stavu `active`, zabanované, neaktivní (poslední heartbeat starší než `heartbeat_timeout_s`) a nedosažitelné (§6.1) se vynechají. Je neměnný po celou epochu, takže všichni dostanou stejný adresář. Odpojení nodu se tedy projeví až v další epoše.
 
 ```json
 {"v":1,"epoch":4242,"epoch_seconds":300,"issued_at":1272600,
@@ -173,6 +174,20 @@ Textová zpráva `ping` (bez JSON) obslouží runtime Workeru odpovědí `pong` 
 `sig` = Ed25519 klíčem Workeru přes doménu `ancord/v1/directory` a `payload = kanonické JSON body`.
 
 `GET /directory` vrací aktuální obálku (`Cache-Control: public, max-age=15`). Klíč Workeru je zapečený v klientovi i nodu, `GET /.well-known/ancord-key` ho vrací jako `{"pubkey":"…","kid":"…"}`.
+
+### 6.1 Dosažitelnost a výpadek Workeru
+
+**Split-brain** (node vidí Workera, ale ostatní nody se k němu nedovolají, typicky když spadne tunel nebo `cloudflared`, zatímco odchozí WebSocket k Workeru běží):
+1. Node počítá neúspěšná volání peerů (§13.4, §14.2): chyba spojení, timeout nebo odpověď Cloudflare, že origin nedosáhl (`502`, `504`, `520`–`530`). Jakákoli jiná odpověď peeru se počítá jako úspěch a čítač vynuluje. Peer s `reach_min_failures` (výchozí 3) neúspěchy po sobě, posledním mladším než `reach_window_s` (120 s), se hlásí v heartbeatu (`unreachable`, §5).
+2. Worker hlášením **nevěří** (skupina Sybil nodů by jimi vyřadila poctivé). Hlášení jen spustí ověření: když cíl nahlásí aspoň `reach.minReporters` různých nodů (`dev`, `prod` 1, `open` 2), Worker sám zavolá `GET https://<hostname>/health` s timeoutem `reach.probeTimeoutMs`, tedy stejnou cestou jako nody (Cloudflare → tunel). Úspěch (`200`) hlášení zahodí.
+3. Po `reach.failuresToExclude` (2) neúspěšných ověřeních po sobě (nejdřív po `reach.probeIntervalS`) se node **vyřadí** z dalšího adresáře i z routingu. Heartbeaty i challenge běží dál. Vyřazený node Worker ověřuje každých `reach.reprobeS` a po prvním úspěchu ho vrátí (projeví se v další epoše).
+4. Vyřadit lze nejvýše `floor(reach.maxExcludedFraction × živé nody)` (0,34). Když se Worker nedovolá k víc nodům, chyba je spíš na jeho straně a nevyřadí nikoho dalšího.
+
+Node, který se nedovolá k nikomu (rozbitý odchozí provoz), Worker nevyřadí, protože ostatní ho dosáhnou. Zápisy přes něj ale selžou (`quorum_unavailable`) a klient přejde na další node z trasy (§8).
+
+**Výpadek Workeru.** Adresář nemá expiraci. Nody drží poslední, který dostaly, epocha bez Workeru zamrzne (nový adresář vzniká jen u Workeru), anchory se nemění a handoff nemá co dělat. Už připojení klienti si dál píší přes data plane. Nové spojení vyžaduje ticket z `/route`, takže noví klienti se připojí až po návratu Workeru. Push (`/wake`) do té doby nefunguje.
+
+**Rozdílné epochy.** Když Worker vypadne uprostřed rozesílání adresáře, část nodů drží novější epochu. Peer, který odmítne požadavek `403` (§13.4), může mít novější adresář. Volající si ho proto (nejvýše jednou za 10 s) stáhne `GET https://<hostname>/n/directory`, ověří podpis Workeru a převezme ho, je-li novější. Požadavek pak skončí chybou, protože se změnily anchory, a další už jde podle nového adresáře.
 
 ## 7. Anchory (HRW)
 
@@ -219,18 +234,20 @@ Výzva: `{"kind":"cpu","seed":"<b64u 32 B>","iters":N,"every":C,"lanes":L,"deadl
 Pro `lane ∈ [0, L)`: `h₀ = sha256(seed ‖ lane_le_u32)`, `h_{i+1} = sha256(h_i)`. Node vrátí `checkpoints`: pole `L` polí, v každém `N / C` hodnot (b64u), kde prvek `j` je `h_{(j+1)·C}`. (`N` je násobek `C`.) Worker přepočítá `S` náhodných segmentů (lane, j): z `h_{j·C}` (pro `j = 0` je to `h₀`) spočte `C` hashů a porovná s `checkpoint[j]`. Skóre = `L · N / (čas − RTT)` hashů za sekundu (shora omezené plausibilním maximem). `L = min(cpu_cores, max_lanes)`.
 
 ### 9.2 `space_commit` a `space_open` – Proof of Space s Merkle commitmentem
-Tabulka má `n` bloků po 32 B (`n` je mocnina dvou):
+Tabulka má `n` bloků po 32 B (`n` je mocnina dvou). Každý blok odkazuje na předchozí blok a na `d = 4` náhodné dřívější bloky:
 ```
-T[0] = sha256("ancord/space/0" ‖ seed)
-j(i) = u64_le(T[i−1][0..8]) mod i                  pro i ≥ 1
-T[i] = sha256("ancord/space/i" ‖ seed ‖ u64_le(i) ‖ T[i−1] ‖ T[j(i)])
+T[0]   = sha256("ancord/space/0" ‖ seed)
+j_m(i) = u64_le(T[i−1][8m..8m+8]) mod i            pro i ≥ 1, m = 0…3
+T[i]   = sha256("ancord/space/i" ‖ seed ‖ u64_le(i) ‖ T[i−1] ‖ T[j_0(i)] ‖ T[j_1(i)] ‖ T[j_2(i)] ‖ T[j_3(i)])
 ```
 Merkle strom: `leaf(i) = sha256(0x00 ‖ T[i])`, `node = sha256(0x01 ‖ L ‖ R)`. Cesta = sourozenecké hashy odspodu nahoru, `bit k` indexu určuje, zda je prvek na úrovni `k` levý (0) nebo pravý (1).
 
 - **`space_commit`**: `{"kind":"space_commit","tier":"ram|storage","seed":"…","leaves":n,"deadline_ms":…}`. Node odpoví `{"root":"<b64u>"}`. Worker si `(tier, seed, root, leaves)` uloží.
-- **`space_open`**: `{"kind":"space_open","tier":"…","indices":[i₁…i_k],"deadline_ms":…}` (každé `i ≥ 1`, `i < n`). Pro každé `i` vrátí node `{"i":…,"leaf":T[i],"path":[…],"prev":T[i−1],"prev_path":[…],"ref":T[j(i)],"ref_path":[…]}` (hodnoty a cesty b64u). Worker ověří tři cesty vůči uloženému kořeni, spočte `j(i)` z `prev`, zkontroluje `ref` na indexu `j(i)` a přepočítá `T[i]`.
+- **`space_open`**: `{"kind":"space_open","tier":"…","indices":[i₁…i_k],"deadline_ms":…}` (každé `i ≥ 1`, `i < n`). Pro každé `i` vrátí node `{"i":…,"leaf":T[i],"path":[…],"prev":T[i−1],"prev_path":[…],"refs":[T[j_0(i)],…,T[j_3(i)]],"ref_paths":[[…],…]}` (hodnoty a cesty b64u, `refs` a `ref_paths` v pořadí `m`). Worker ověří šest cest vůči uloženému kořeni, spočte `j_m(i)` z `prev`, zkontroluje, že `refs[m]` leží na indexu `j_m(i)`, a přepočítá `T[i]`.
 
 Po `space_commit` následuje bezprostředně `space_open`; samotný `space_open` se opakuje nad uloženým commitmentem. Latence odpovědi (po odečtení RTT) musí být v `deadline_ms` dané vrstvy (`ram` je přísnější než `storage`). Prokázaná kapacita je `n · 32 B`.
+
+**Co důkaz zaručuje** (měření v `ARCHITECTURE.md` §9 bod 3). Node, který drží jen část tabulky, chybějící bloky dopočítá z uložených. Čtyři odkazy na blok to prodražují: s polovinou tabulky stojí výzva ~7 tisíc hashů, s třetinou ~190 tisíc a se čtvrtinou ~500 tisíc (tabulka 2^22, nejdražší z 16 otevření). Do `deadline_ms` se tedy vejde nejvýše několikanásobné nadsazení, ne řády. `ram` a `storage` se liší jen deadlinem: NVMe projde i deadlinem `ram`, odliší se až pomalý disk. Rozdíl RAM a NVMe (~0,2 ms a ~55 ms na výzvu) je menší než nejistota RTT přes tunel.
 
 ### 9.3 `bandwidth` – R2 blob (download a upload)
 Výzva: `{"kind":"bandwidth","bytes":B,"dl_url":"https://…","ul_url":"https://…","deadline_ms":…}`. Node stáhne `GET dl_url` (celé tělo, `B` bajtů), spočte `sha256` a pošle stejné bajty `PUT ul_url`. Pak odpoví `{"sha256":"<b64u>"}`. URL jsou jednorázové (token s platností `token_ttl_s`, vázaný na challenge a směr). Worker měří dobu přenosu na své straně (od začátku odpovědi po poslání posledního bajtu, resp. od začátku po přečtení posledního bajtu uploadu) a kontroluje hash. Skóre = `min(download, upload)` v Mbit/s.
@@ -280,37 +297,43 @@ Double Ratchet (Signal) nad dvěma jednosměrnými mailboxy: symetrický řetěz
 **Odvození klíčů.**
 ```
 rk_0         = HKDF(ikm = ss, salt = "ancord/v1/ratchet", info = "root", L = 32)
-KDF_RK(rk, d) = okm = HKDF(ikm = d, salt = rk, info = "ancord/v1/ratchet/root", L = 64)   → (rk' = okm[0..32], ck = okm[32..64])
+KDF_RK(rk, d) = okm = HKDF(ikm = d, salt = rk, info = "ancord/v1/ratchet/root", L = 96)   → (rk' = okm[0..32], ck = okm[32..64], nhk = okm[64..96])
+hk_0(dir)    = HKDF(ikm = ss, salt = "ancord/v1/ratchet", info = "header/" ‖ dir, L = 32)    // klíč hlavičky prvního řetězu směru dir
 mk_n         = HKDF(ikm = ck_n, salt = (prázdná), info = "ancord/v1/ratchet/msg", L = 44)   key = mk_n[0..32], nonce = mk_n[32..44]
 ck_{n+1}     = HKDF(ikm = ck_n, salt = (prázdná), info = "ancord/v1/ratchet/chain", L = 32)
 ```
 
-**Stav strany:** kořenový klíč `rk`, vlastní ratchet pár `DHs`, poslední ratchet klíč protistrany `DHr`, odesílací a přijímací řetěz `CKs`, `CKr`, čítače `Ns` (zpráv v odesílacím řetězu), `Nr` (v přijímacím), `PN` (délka předchozího odesílacího řetězu), `seq` (zpráv odeslaných celkem) a uložené klíče přeskočených zpráv. Odesílací mailbox je `mailbox_id(dir)` své role, přijímací protistrany (§13.1); mailboxy se kvůli ratchetu nemění.
+**Stav strany:** kořenový klíč `rk`, klíče hlaviček `HKs`, `HKr` (aktuální řetěz) a `NHKs`, `NHKr` (následující řetěz; `NHKs`, `NHKr` začínají jako `hk_0` svého směru), vlastní ratchet pár `DHs`, poslední ratchet klíč protistrany `DHr`, odesílací a přijímací řetěz `CKs`, `CKr`, čítače `Ns` (zpráv v odesílacím řetězu), `Nr` (v přijímacím), `PN` (délka předchozího odesílacího řetězu), `seq` (zpráv odeslaných celkem) a uložené klíče přeskočených zpráv. Odesílací mailbox je `mailbox_id(dir)` své role, přijímací protistrany (§13.1); mailboxy se kvůli ratchetu nemění.
 
 **Začátek.** Iniciátor zná první ratchet klíč `R` responderu (veřejný) a vygeneruje `DHs`:
 ```
-iniciátor:  rk, CKs = KDF_RK(rk_0, X25519(DHs, R));  DHr = R;  CKr = žádný
-responder:  rk = rk_0;  DHs = (tajný klíč k R);  DHr = žádný;  CKs = CKr = žádný
+iniciátor:  rk, CKs, NHKs' = KDF_RK(rk_0, X25519(DHs, R));  HKs = NHKs (= hk_0(i2r));  NHKs = NHKs';  DHr = R;  CKr = žádný
+responder:  rk = rk_0;  DHs = (tajný klíč k R);  DHr = žádný;  CKs = CKr = HKs = HKr = žádný
 ```
 `R` určuje způsob dohody: u X3DH (§15.4) je to podepsaný prekey `spk` příjemce, u ručně sdíleného tajemství (bez prekeys) `R = X25519 veřejný klíč k b = HKDF(ikm = ss, salt = "ancord/v1/ratchet", info = "initial-dh", L = 32)`. Responder tedy **nemůže psát, dokud nepřijme první zprávu iniciátora** (nemá odesílací řetěz); `seal` pak selže.
 
-**Zpráva** s hlavičkou `H = dh(32 B) ‖ pn_be_u32 ‖ n_be_u32 ‖ seq_be_u32` (44 B; `dh` je veřejný klíč `DHs` odesílatele, `pn = PN`, `n = Ns`):
+**Zpráva** s hlavičkou `H = dh(32 B) ‖ pn_be_u32 ‖ n_be_u32 ‖ seq_be_u32` (44 B; `dh` je veřejný klíč `DHs` odesílatele, `pn = PN`, `n = Ns`). Hlavička se šifruje (Signal „header encryption“), takže anchor nevidí ani `dh`, ani čítače:
 ```
-aad = "ancord/v1/msg" ‖ 0x00 ‖ mailbox_id(32 B) ‖ id(16 B) ‖ H
-ct  = b64u( H ‖ ChaCha20-Poly1305(key, nonce, aad, plaintext) )      // šifrový text vč. 16 B tagu
+hn  = sha256("ancord/v1/hdr" ‖ 0x00 ‖ id)[0..12]
+eH  = ChaCha20-Poly1305(HKs, nonce = hn, aad = "ancord/v1/hdr" ‖ 0x00 ‖ mailbox_id(32 B) ‖ id(16 B), H)   // 44 B + 16 B tag = 60 B
+aad = "ancord/v1/msg" ‖ 0x00 ‖ mailbox_id(32 B) ‖ id(16 B) ‖ eH
+ct  = b64u( eH ‖ ChaCha20-Poly1305(key, nonce, aad, plaintext) )      // tělo vč. 16 B tagu
 ```
-Odesílatel vezme `mk` z `CKs`, posune `CKs`, zvýší `Ns` a `seq`. `seq` slouží jen k řazení zpráv u příjemce (`ts` má sekundovou přesnost a `n` se v každém řetězu vrací na nulu).
+Odesílatel vezme `mk` z `CKs`, posune `CKs`, zvýší `Ns` a `seq`. `id` je pro každou zprávu nové, takže nonce hlavičky se pod týmž klíčem neopakuje. `seq` slouží jen k řazení zpráv u příjemce (`ts` má sekundovou přesnost a `n` se v každém řetězu vrací na nulu).
 
 **Příjem.** Pracuje se na kopii stavu, která se přijme až po ověření tagu, takže podvržená zpráva nic nezmění:
-1. Existuje uložený klíč pro `(dh, n)` → použije se a smaže.
-2. Jinak, je-li `dh ≠ DHr`: uloží se klíče zbývajících zpráv přijímacího řetězu do `pn` a provede se **DH krok**: `PN = Ns; Ns = 0; Nr = 0; DHr = dh; rk, CKr = KDF_RK(rk, X25519(DHs, DHr)); DHs = nový pár; rk, CKs = KDF_RK(rk, X25519(DHs, DHr))`.
+0. Příjemce nejdřív otevře hlavičku. Zkouší klíče hlaviček uložených přeskočených zpráv, pak `HKr`, nakonec `NHKr` (ten znamená DH krok). Žádný klíč nesedí → zpráva se zahodí.
+1. Existuje uložený klíč pro `(klíč hlavičky, n)` → použije se a smaže.
+2. Jinak, byla-li hlavička otevřena klíčem `NHKr` (tedy `dh ≠ DHr`): uloží se klíče zbývajících zpráv přijímacího řetězu do `pn` a provede se **DH krok**: `PN = Ns; Ns = 0; Nr = 0; DHr = dh; HKs = NHKs; HKr = NHKr; rk, CKr, NHKr = KDF_RK(rk, X25519(DHs, DHr)); DHs = nový pár; rk, CKs, NHKs = KDF_RK(rk, X25519(DHs, DHr))`.
 3. Je-li `n < Nr` (a klíč není uložený), zpráva se odmítne jako přehraná; jinak se uloží klíče zpráv `Nr..n` přeskočených v řetězu a použije se `mk_n`.
 
 Mezera větší než `max_skip = 200` zpráv v řetězu (`n − Nr`, resp. `pn − Nr`) se odmítne jako desync; uložených klíčů je nejvýše `max_skip` (nejstarší se zahazují). Po použití se klíč zprávy i `ck_n` zahodí (forward secrecy v rámci řetězu).
 
 **Post-compromise security.** Kdo získá celý stav strany v čase *t*, čte zprávy, dokud tato strana neudělá DH krok s novým párem, který útočník nezná: první odpověď protistrany, kterou přijme, a pak odpověď na ni. Od té chvíle `rk` závisí na DH výstupu, který útočník bez nového tajného klíče nespočítá, a konverzace se uzdraví. Platí to jen, když si strany píšou oba směry: jednostranný proud zpráv se nikdy neuzdraví.
 
-**Hlavička není skrytá.** Anchor ve zprávě vidí `dh`, `pn`, `n` a `seq` (náhodný klíč nesouvisí s identitou). Z toho pozná, kdy odesílatel poprvé přijal odpověď (změna `dh`), a počet zpráv v mailboxu. Šifrování hlavičky (Signal „header encryption“) by to skrylo, ale zvětšilo by stav; zatím se nedělá.
+**Keepalive.** Strana, která přijala DH krok (má nový ratchet pár) a zatím na něj nic neodeslala, protistraně svůj nový klíč nepředala, takže se po úniku stavu neuzdraví. Klient proto po 30 s (konstanta CLI) od přijaté zprávy, na kterou uživatel nic nenapsal, pošle **prázdnou zprávu** (plaintext délky 0, běžný `seal`). Je to obyčejná zpráva, jen se neukládá do historie a nikdy se na ni neodpovídá keepalivem (jinak by si ho strany posílaly donekonečna). Nejvýše jeden za 3600 s v konverzaci, bez `push_id` (příjemce kvůli ní nemá smysl budit).
+
+**Co anchor vidí.** Hlavička je zašifrovaná, takže nepozná změnu `dh` (DH krok) ani čítače. Zůstává mu velikost zprávy (60 B hlavičky + tělo), čas zápisu, `id` a počet zpráv v mailboxu. Cena: strana drží navíc klíče hlaviček a uložené přeskočené klíče jsou svázané s klíčem hlavičky.
 
 ### 13.3 Zprávy klient → node
 Po `ready` (§8.1). Každý požadavek může nést `rid` (řetězec do 64 znaků), který odpověď zopakuje. Chyba má tvar `{"t":"error","rid":…,"code":"<kód>","reason":"<text>"}`; spojení po ní zůstává.
@@ -346,6 +369,8 @@ O jednu epochu napřed bývá odesílatel jen na několik vteřin, příjemce ad
 | `/n/ack` | `{"mailbox_id","ids":[…]}` | `{"n":k}` (počet změněných záznamů) |
 
 `put` s existujícím `(mailbox_id, id)` vrací `duplicate` a nemění nic, jen `delivered: true` převede pending záznam na doručený (delivered vyhrává vždy). `ack` vyrobí z neexistující zprávy záznam „doručeno“, takže pozdní `put` zprávu neoživí. Plný mailbox odpoví `507 mailbox_full`.
+
+`GET /n/directory` → podepsaná obálka adresáře (§6), kterou node drží, nebo `404`. Nepodepsaný request: obálka je veřejná a podepsaná Workerem (§6.1).
 
 `POST /n/presence` (gateway → anchor) `{"mailbox_id","exp"}` → `{"ok":true}`: volající je gateway (z podpisu), `exp` je unixový čas konce platnosti (`0` ruší). Příjemce musí být anchorem `mailbox_id`.
 `POST /n/deliver` (anchor → gateway) `{"mailbox_id","id","ts","ct"}` → `{"delivered":bool}`: `403`, pokud volající není anchorem `mailbox_id`. `delivered` je `true`, když zprávu dostal aspoň jeden odběratel (nebo ji gateway už předala, duplicity od dalších anchorů se zahazují).
@@ -457,7 +482,9 @@ Anchor drží vždy profil s nejvyšším `ts`; starší nebo shodný `ts` nic n
 | `{"t":"profile_put","pk","bk","spk","otks","push_id","ts","pow","sig"}` | `{"t":"profile_stored","acks":n}` | ověří podpis a `pow`, zapíše na `r` anchorů, hotovo po `quorum` potvrzeních |
 | `{"t":"profile_get","pk"}` | `{"t":"profile","pk","bk","spk","otks","push_id","ts","pow","sig"}` | přečte `r − quorum + 1` anchorů, vrátí profil s nejvyšším `ts`; `not_found`, když ho nemá žádný |
 
-Nové chybové kódy: `not_found`, `invalid_proof` (podpis nebo `pow` profilu neplatí).
+| `{"t":"inbox_guard","pk","bits","ts","sig"}` | `{"t":"inbox_guarded","acks":n}` | zapne stráž schránky (§15.13), zapíše na `r` anchorů, hotovo po `quorum` potvrzeních |
+
+Nové chybové kódy: `not_found`, `invalid_proof` (podpis nebo `pow` profilu či stráže neplatí), `pow_required` (zápis do střežené schránky bez platného razítka; odpověď nese `"bits"`, tedy požadovanou obtížnost).
 
 ### 15.4 Zahájení konverzace (X3DH) a obálka
 Iniciátor (Alice) zná ověřený čerstvý profil příjemce (Bob). Alice vygeneruje efemerní X25519 klíč `ek`, z `otks` Bobova profilu vybere náhodně jeden `otk` (nejsou-li, vynechá se) a spočítá:
@@ -508,9 +535,10 @@ Přes zabezpečený kanál (§14.2), všechny podepsané jako `put`/`get` (§13.
 | `profile_get` | `{"pk"}` | `{"profile":{…}\|null}` (`null`, když ho anchor nemá) | člen adresáře; příjemce musí být anchorem `profile_id` |
 | `signal` | `{"mailbox_id","on"}` | `{"ok":true}` | člen adresáře; příjemce musí být anchorem `mailbox_id`; má-li presence, předá `typing` |
 | `typing` | `{"mailbox_id","on"}` | `{"delivered":bool}` | anchor mailboxu (jako `deliver`) |
+| `guard` (`/n/guard`) | stráž (§15.13) | `{"status":"stored"\|"duplicate"}` | člen adresáře; příjemce musí být anchorem `inbox_id(pk)`, stráž si ověří sám |
 | `status` | `{"mailbox_id","ids":[…]}` | `{"states":[…]}` | člen adresáře; příjemce musí být anchorem `mailbox_id` |
 
-Příjemce `profile_put` profil znovu ověří (podpis, `pow`, `ts`); volající mu nevěří. Při handoffu (§13.5) se profily přesouvají jako zprávy, anchory podle `profile_id`.
+Stráže se při handoffu přesouvají stejně jako profily. Příjemce `profile_put` profil znovu ověří (podpis, `pow`, `ts`); volající mu nevěří. Při handoffu (§13.5) se profily přesouvají jako zprávy, anchory podle `profile_id`.
 
 ### 15.10 Adresa ke sdílení
 Adresa se předává mimo síť: QR kódem nebo zkopírováním textu (zpráva, e-mail, cokoli). Textový tvar je URI `ancord:<pk>` (`pk` je b64u, 43 znaků); QR kód obsahuje přesně tento řetězec. Klient přijme i holé `pk` bez předpony. Před použitím ověří, že `pk` je platný bod Ed25519. Překlep v adrese tak většinou skončí chybou, a pokud ne, profil pro takovou adresu neexistuje (`not_found`). Že adresa patří správné osobě, potvrdí bezpečnostní číslo (§15.4).
@@ -532,3 +560,12 @@ Doporučený průběh klienta, který je připojený (CLI `ancord online`):
 7. Při výpadku gateway se klient připojí znovu s novým `/route`. Presence na starém nodu vyprší sama.
 
 Token registruje klient přímo u Workeru (§10.1) pro schránku a pro příchozí mailbox každé konverzace, tedy i nově založené.
+
+### 15.13 Stráž schránky (proof-of-work proti zahlcení)
+`inbox_id` se odvozuje z veřejné adresy (§15.4), takže do schránky může psát kdokoli. Majitel proto na jejích anchorech zapne **stráž**: anchor pak přijme nový zápis do schránky jen s platným razítkem.
+
+**Stráž** `{"pk","bits","ts","sig"}`: `sig` je Ed25519 klíčem `pk` přes doménu `ancord/v1/inbox-guard` a `payload = inbox_id(32 B) ‖ bits(1 B) ‖ ts_be_u64`. Anchor ji přijme, jen když `|now − ts| ≤ 86 400 s`, `bits ≤ 28` a podpis sedí; stráž cizí schránky nikdo nezapne, protože `inbox_id` je hash `pk`. Novější `ts` nahrazuje starší, `bits = 0` stráž vypíná. Platnost stráže je stejná jako u profilu (`profile_ttl_s`), klient ji proto obnovuje při každém připojení (§15.12). Zapíná se přes `inbox_guard` (§15.3) a anchory si ji předávají v handoffu.
+
+**Razítko** je prefix `ct` schránky: `ct = pow_le_u64 ‖ obálka`. Platí hashcash (stejná funkce jako `pow` profilu) nad `sha256("ancord/v1/inbox-pow" ‖ 0x00 ‖ mailbox_id ‖ id ‖ obálka)` se solí `mailbox_id` a obtížností `bits`, takže razítko platí jen pro tuto zprávu v této schránce. Bez platného razítka anchor odpoví `pow_required` s `bits`; odesílatel razítko dopočítá s požadovanou obtížností (nejvýše 28) a zápis zopakuje. Náhrobky (potvrzení doručení) razítko nepotřebují. Příjemce razítko před zpracováním obálky (§15.4) odřízne. CLI zapíná stráž s `bits = 20`.
+
+**Mez:** stráž drahé zahlcení zdražuje, nezastaví ho. Útočník s výpočetním výkonem schránku dál zaplní až po strop nedoručených zpráv a majitel proti tomu může jen zvýšit `bits` (a tím ztížit psaní i ostatním).

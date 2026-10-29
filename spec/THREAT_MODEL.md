@@ -7,7 +7,7 @@ Doplněk k `ARCHITECTURE.md` §8. Popisuje, co Worker (control plane) chrání, 
 | Aktivum | Kdo ho drží | Kdo ho nesmí získat |
 |---|---|---|
 | Obsah zpráv | klienti (E2E) | Worker, operátoři nodů |
-| IP uživatele | Cloudflare | operátoři nodů, Worker (jen `request.cf` při `/route`, neukládá se) |
+| IP uživatele | Cloudflare | operátoři nodů (**dnes ji vidí**, viz níže), Worker (jen `request.cf` při `/route`, neukládá se) |
 | Privátní klíč Workeru (podpis ticketů a adresáře) | secret `WORKER_SIGNING_KEY` | kdokoli mimo Worker |
 | Cloudflare API token Workeru | secret `CF_API_TOKEN` (Tunnel Edit + DNS Edit jen pro zónu) | kdokoli mimo Worker |
 | Push tokeny | KV, šifrované AES-GCM (`PUSH_ENC_KEY`, AAD = `push_id`) | nody, útočník s přístupem jen ke KV |
@@ -22,7 +22,7 @@ Worker je **důvěryhodný pro dostupnost a poctivost routingu, nikoli pro obsah
 | Sybil (mnoho nodů) | hashcash vázaný na nonce a klíč s adaptivní obtížností, limity nodů na ASN a na /24 (/48), probation (váha roste s ověřenou uptime a splněnými challenge), penalizace ASN po banu | odhodlaný útočník s mnoha ASN; ekonomická neatraktivita (málo provozu bez reálných zdrojů) |
 | Registrace cizího hostname | podpis `nonce ‖ hostname ‖ pubkey`, jednorázová výzva, důkaz držení klíče na hostname (`melo-proof`) až po startu tunelu | – |
 | Zabrání cizího DNS záznamu / smazání cizích zdrojů | Worker píše a maže jen `node-<16 znaků>.<zóna>`, před zápisem čte existující záznamy, maže jen záznamy s komentářem `ancord-managed` a tunely s prefixem `ancord-`; kontrola přímo v klientovi, ne jen v logice registrace | token s širším oprávněním, než je nutné (viz ARCHITECTURE §12.3: užší token pro Worker) |
-| Lhaní o specs | `min(claimed, measured)`; nezměřená dimenze = nulová kapacita; CPU hash-chain s náhodnými segmenty, Proof of Space s Merkle commitmentem a konzistencí `T[i]` ze `T[i−1]`, `T[j(i)]`, bandwidth přes R2 se serverovým měřením | nelze kryptograficky dokázat „mám 16 GB RAM“; obrana je měření, probation a ekonomika |
+| Lhaní o specs | `min(claimed, measured)`; nezměřená dimenze = nulová kapacita; CPU hash-chain s náhodnými segmenty, Proof of Space s Merkle commitmentem a konzistencí `T[i]` ze `T[i−1]` a čtyř `T[j_m(i)]`, bandwidth přes R2 se serverovým měřením | nelze kryptograficky dokázat „mám 16 GB RAM“; obrana je měření, probation a ekonomika. Proof of Space snese zhruba 3–4× nadsazení (node s třetinou až čtvrtinou tabulky výzvu dopočítá do deadlinu) a NVMe projde jako RAM (`ARCHITECTURE.md` §9 bod 3) |
 | Přeposílání challenge jinam | tvrdé deadliny v ms (po odečtení RTT), memory-hard odvození s datově závislým přístupem, náhodné indexy otevření | node s rychlým spojením na silnější stroj projde; takový stroj ale skutečně poskytuje výkon |
 | Replay | podepsané requesty s časovým oknem ±60 s a jednorázovým nonce (DO), `seq` heartbeatu, `ts` push registrace, jednorázové výzvy a tokeny | – |
 | Podvržení identity při `/ws` | hlavičky `x-ancord-*` pro Registry sestavuje výhradně Worker po ověření podpisu; Registry není dostupné zvenčí | – |
@@ -46,16 +46,18 @@ Mobilní klient, UI, tokenová ekonomika. Cloudflare vidí IP adresy, čas a zao
 
 ## 6. Data plane (node)
 
-Operátor anchoru vidí: `mailbox_id` (hash sdíleného tajemství, nespojitelný s identitou), velikost a čas zápisu a čtení, IP nejsou vidět (Cloudflare). Obsah vidí jen jako ciphertext.
+Operátor anchoru vidí: `mailbox_id` (hash sdíleného tajemství, nespojitelný s identitou), velikost a čas zápisu a čtení. **IP uživatele vidí jen gateway**, ke které se klient připojí (anchory vidí IP gateway, ne klienta; měření C3, `ARCHITECTURE.md` §9 bod 1): Transform Rule odstraní jen hlavičky podvržené klientem, skutečná IP dorazí v `cf-connecting-ip` a v `x-forwarded-for` (přidává `cloudflared`), spolu s `cf-ipcountry`. Node tyto hlavičky nečte ani neloguje, ale poctivost operátora nelze předpokládat. Přijatelné jen pro vlastní (genesis) nody; pro otevřenou síť je nutná gateway Worker (varianta B) nebo jiný transport. Rozhodnutí je otevřené. Obsah vidí jen jako ciphertext.
 
 | Hrozba | Obrana v implementaci | Zbytkové riziko |
 |---|---|---|
-| Čtení zpráv anchorem | E2E: ChaCha20-Poly1305, klíč na každou zprávu z Double Ratchetu (HKDF řetěz + DH krok), AAD váže ciphertext na `mailbox_id` a `id` zprávy | operátor vidí metadata (časování, velikost, počet zpráv v mailboxu) a nešifrovanou hlavičku ratchetu (`dh`, `pn`, `n`, `seq`): ví, kdy odesílatel přijal odpověď, identitu ne |
+| Čtení zpráv anchorem | E2E: ChaCha20-Poly1305, klíč na každou zprávu z Double Ratchetu (HKDF řetěz + DH krok), AAD váže ciphertext na `mailbox_id` a `id` zprávy | operátor vidí metadata (časování, velikost, počet zpráv v mailboxu); hlavička ratchetu (`dh`, `pn`, `n`, `seq`) je zašifrovaná klíčem hlavičky, takže nepozná DH krok ani čítače |
 | Podvržení nebo přehrání zprávy nodem | AEAD tag, stav ratchetu se mění až po ověření tagu, použitý klíč se zahodí; přehraná zpráva (`n < Nr` bez uloženého klíče) se odmítne; DH krok i přeskočené klíče se počítají na kopii stavu, která se přijme až po ověření tagu | node může zprávu zadržet nebo smazat (dostupnost řeší replikace R=3 s kvorem 2) |
 | Znovupoužití nonce | nonce i klíč jsou odvozeny z řetězu a unikátní pro každé `n`; klient musí stav uložit **před** odesláním (CLI to dělá) | klient, který stav ratchetu vrátí zpět (záloha, klon zařízení), znovu použije `n` s jiným obsahem; to ratchet sám nezachytí |
 | Zahlcení mailboxu | zápis vyžaduje znalost `mailbox_id` (odvozeného z tajemství), strop nedoručených zpráv v mailboxu, limit zpráv na spojení, limit velikosti, ticket je jednorázový a vázaný na efemérní klíč | kdo zná `mailbox_id`, ho může zaplnit až po strop; `mailbox_id` v kódu zná jen dvojice klientů a anchory |
 | Falešný anchor nebo podvržený node↔node request | každý request podepsán identitou nodu a ověřen proti adresáři Workeru (aktuální nebo předchozí epocha), nonce proti replayi, příjemce zapisuje a vydává jen mailboxy, pro které je sám anchorem | škodlivý anchor smí číst a mazat mailboxy, jejichž je anchorem (kvorum čtení ho přehlasuje jen částečně, protože čtení sjednocuje) |
 | Oživení doručené zprávy | doručení se zapisuje jako náhrobek až do vypršení, `delivered` vyhrává při `put` i handoffu | ack, který nedorazil na žádný z anchorů, zprávu doručí podruhé; klient je odolný díky ratchetu (stejné `n` už nejde otevřít) |
+| Vyřazení poctivého nodu falešným hlášením nedosažitelnosti | hlášení v heartbeatu (`unreachable`) jen spustí ověření; vyřazuje Worker podle vlastního `GET /health` přes tunel, nejvýše třetinu živých nodů, a vyřazený node vrátí po prvním úspěšném ověření (`PROTOCOL.md` §6.1) | hlášeními lze Workera přimět k ověřovacím requestům (limit `maxProbesPerTick`, rozestup `probeIntervalS`); node, který Workera pouští a ostatní nody ne (selektivní blokace podle zdroje), zůstane v adresáři |
+| Podvržený adresář od peera | `/n/directory` se převezme jen s platným podpisem Workeru a jen novější než držený | peer může starší adresář zatajit (vydá svůj), tím ale nic nezíská |
 | Ztráta dat při změně epochy | handoff nových anchorů před smazáním (potvrzení aspoň `quorum`), příjemci přijímají zápis i podle předchozí epochy | uzel, který ve chvíli změny epochy padne před dokončením handoffu, nechá data na ostatních dvou kopiích; přežití dvou současných výpadků není garantováno |
 
 ## 7. Zabezpečený kanál (`PROTOCOL.md` §14)
@@ -93,7 +95,7 @@ Profil (`pk`, `bk`, `spk`, jednorázové prekeys) je veřejný. Anchor profilu v
 | Replay obálky | `otk` po použití neexistuje; obálka bez `otk` dá totéž `ss`, existující konverzaci klient nepřepíše | – |
 | Souběžné použití téhož `otk` dvěma iniciátory | druhá obálka se odmítne (`PrekeyGone`) a zahodí | druhý iniciátor musí začít znovu po novém profilu; příjemce profil po zpracování obálek znovu zveřejní |
 | Zahlcení anchorů profily | hashcash na profil, limit zpráv na spojení, TTL, vždy jen jeden profil na `pk` | útočník s výpočetním výkonem; obtížnost je v konfiguraci |
-| Zahlcení schránky (`inbox`) cizími obálkami | strop nedoručených zpráv v mailboxu, limit zpráv na spojení; příjemce neplatné obálky zahazuje a uvolňuje | schránka je veřejná z adresy: útočník ji může zaplnit až po strop (10 000) a zablokovat nové kontakty, dokud ji příjemce nevyčistí |
+| Zahlcení schránky (`inbox`) cizími obálkami | stráž schránky: zápis vyžaduje razítko proof-of-work (`spec/PROTOCOL.md` §15.13, CLI 20 bitů); strop nedoručených zpráv v mailboxu, limit zpráv na spojení; příjemce neplatné obálky zahazuje a uvolňuje | útočník s výpočetním výkonem schránku dál zaplní až po strop (10 000) a zablokuje nové kontakty, dokud ji příjemce nevyčistí; zvýšení `bits` ztíží psaní i legitimním odesílatelům |
 | Enumerace uživatelů | profil se hledá jen podle celého `pk` (256 bitů), neexistuje seznam ani vyhledávání | kdo zná `pk`, zjistí, že profil existuje |
 | Falešný typing nebo stav doručení škodlivým anchorem | typing nemá důkaz původu a je jen UI, stav `delivered` čte kvorum a `delivered` vyhrává | škodlivý anchor může signál podvrhnout nebo zahodit; obsah zpráv to neovlivní |
 | Zahlcení signály | token bucket na spojení, signál se neukládá, koalescence stejného stavu | – |

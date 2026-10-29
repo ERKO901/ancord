@@ -19,7 +19,7 @@ src/
   config.ts           profily dev / prod / open (žádné parametry v kódu)
   cloudflare.ts       CloudflareClient: skutečné API (s pojistkami pro sdílenou zónu) a mock
   registry/           Durable Object Registry (SQLite): registrace, WebSocket a heartbeat,
-                      adresář a epochy, skóre, routing snapshot do KV
+                      adresář a epochy, skóre, routing snapshot do KV, ověření dosažitelnosti (reach.ts)
   challenge/          CPU hash-chain, Proof of Space, bandwidth (R2), peer witnessy, plánovač
   push/               registrace tokenu, /wake, fronta, odesílatelé FCM a APNs
   limiter.ts          Durable Object RateLimiter (token bucket + nonce)
@@ -32,7 +32,7 @@ scripts/gen-vectors.ts
 ## Konfigurace
 - Proměnná `PROFILE` (`dev` | `prod` | `open`) vybírá profil z `src/config.ts`. Pro ladění lze přepsat jednotlivé hodnoty JSON proměnnou `CONFIG_OVERRIDES`; neznámý klíč nebo špatný typ je chyba při startu.
 - `ZONE_DOMAIN`, `WORKER_HOST`, `NODE_ORIGIN`, `CF_ACCOUNT_ID`, `CF_ZONE_ID`, `GENESIS_NODE_IDS` (node_id oddělené čárkou) jsou proměnné ve `wrangler.jsonc`.
-- `PROOF_ORIGIN` (volitelné, jen s `CLOUDFLARE_MODE=mock`): základ URL, na který Worker při aktivaci pošle žádost o důkaz místo `https://<hostname>`. Slouží k lokálnímu běhu nodu bez tunelu: `npx wrangler dev --var PROOF_ORIGIN:http://127.0.0.1:8080`. Řetězec `{hostname}` se nahradí hostname nodu (jeden lokální rozcestník pro víc nodů). V režimu `real` se ignoruje.
+- `PROOF_ORIGIN` (volitelné, jen s `CLOUDFLARE_MODE=mock`): základ URL, na který Worker při aktivaci pošle žádost o důkaz (a při ověření dosažitelnosti `GET /health`) místo `https://<hostname>`. Slouží k lokálnímu běhu nodu bez tunelu: `npx wrangler dev --var PROOF_ORIGIN:http://127.0.0.1:8080`. Řetězec `{hostname}` se nahradí hostname nodu (jeden lokální rozcestník pro víc nodů). V režimu `real` se ignoruje.
 - `CLOUDFLARE_MODE`: `mock` (výchozí, nic se nevolá) nebo `real`. `PUSH_MODE`: `log` nebo `real`.
 
 ### Tajemství (`wrangler secret put`, nikdy do gitu)

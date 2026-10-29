@@ -370,6 +370,9 @@ fn attach_rid(reply: &mut Value, request: &Value) {
 
 fn error_reply(e: &DataError, request: Option<&Value>) -> Value {
     let mut reply = json!({"t": "error", "code": e.code(), "reason": e.to_string()});
+    if let DataError::PowRequired(bits) = e {
+        reply["bits"] = json!(bits);
+    }
     if let Some(req) = request {
         attach_rid(&mut reply, req);
     }
@@ -384,6 +387,7 @@ async fn handle(st: &Arc<NodeState>, msg: &Value) -> Value {
         Some("ack") => do_ack(st, msg).await,
         Some("profile_put") => do_profile_put(st, msg).await,
         Some("profile_get") => do_profile_get(st, msg).await,
+        Some("inbox_guard") => do_inbox_guard(st, msg).await,
         Some("typing") => do_typing(st, msg),
         Some("status") => do_status(st, msg).await,
         _ => Err(DataError::BadRequest("unknown message type")),
@@ -426,6 +430,12 @@ async fn do_profile_put(st: &Arc<NodeState>, msg: &Value) -> Result<Value, DataE
     let profile = Profile::from_json(msg).ok_or(DataError::BadRequest("invalid profile"))?;
     let acks = profile::put(st, profile).await?;
     Ok(json!({"t": "profile_stored", "acks": acks}))
+}
+
+async fn do_inbox_guard(st: &Arc<NodeState>, msg: &Value) -> Result<Value, DataError> {
+    let guard = crate::guard::Guard::from_json(msg).ok_or(DataError::BadRequest("invalid guard"))?;
+    let acks = crate::guard::put(st, guard).await?;
+    Ok(json!({"t": "inbox_guarded", "acks": acks}))
 }
 
 async fn do_profile_get(st: &Arc<NodeState>, msg: &Value) -> Result<Value, DataError> {

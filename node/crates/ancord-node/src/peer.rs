@@ -44,8 +44,20 @@ pub struct InSession {
 
 pub type InSessions = std::sync::Mutex<HashMap<[u8; 16], Arc<InSession>>>;
 
+/// `GET /n/directory`: podepsaná obálka adresáře, který node drží (spec §6.1). Veřejná data, podpis ověří příjemce.
+async fn directory(State(st): State<Arc<NodeState>>) -> Response {
+    match st.directory_envelope() {
+        Some(env) => Json((*env).clone()).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 pub fn routes() -> Router<Arc<NodeState>> {
-    Router::new().route("/n/hs", post(handshake)).route("/n/x", post(exchange)).layer(DefaultBodyLimit::max(MAX_BODY))
+    Router::new()
+        .route("/n/hs", post(handshake))
+        .route("/n/x", post(exchange))
+        .route("/n/directory", axum::routing::get(directory))
+        .layer(DefaultBodyLimit::max(MAX_BODY))
 }
 
 /// Chyba operace; do odpovědi jde zašifrovaná.
@@ -54,11 +66,21 @@ pub struct ApiError {
     pub status: u16,
     pub code: &'static str,
     pub message: String,
+    /// Obtížnost razítka u `pow_required` (§15.13).
+    pub bits: Option<u8>,
 }
 
 impl ApiError {
     fn new(status: u16, code: &'static str, message: impl Into<String>) -> Self {
-        Self { status, code, message: message.into() }
+        Self { status, code, message: message.into(), bits: None }
+    }
+
+    fn body(&self) -> Value {
+        let mut e = json!({"code": self.code, "message": self.message});
+        if let Some(bits) = self.bits {
+            e["bits"] = json!(bits);
+        }
+        json!({"error": e})
     }
 }
 
@@ -70,6 +92,7 @@ impl From<DataError> for ApiError {
             DataError::TooLarge => Self::new(413, "too_large", e.to_string()),
             DataError::InvalidProof => Self::new(400, "invalid_proof", e.to_string()),
             DataError::NotFound => Self::new(404, "not_found", e.to_string()),
+            DataError::PowRequired(bits) => Self { bits: Some(bits), ..Self::new(428, "pow_required", e.to_string()) },
             _ => Self::new(503, "unavailable", e.to_string()),
         }
     }
@@ -172,7 +195,7 @@ async fn exchange(State(st): State<Arc<NodeState>>, bytes: Bytes) -> Response {
             if st.consume_nonce(key, now + 2 * SKEW_S + 5, now) {
                 match dispatch(&st, &session.peer, op, body).await {
                     Ok(v) => (200, v),
-                    Err(e) => (e.status, json!({"error": {"code": e.code, "message": e.message}})),
+                    Err(e) => (e.status, e.body()),
                 }
             } else {
                 (409, json!({"error": {"code": "conflict", "message": "request replayed"}}))
@@ -197,6 +220,7 @@ async fn dispatch(st: &Arc<NodeState>, caller: &[u8; 32], op: &str, body: &Value
         "deliver" => deliver(st, caller, body),
         "profile_put" => profile_put(st, body).await,
         "profile_get" => profile_get(st, body).await,
+        "guard" => guard_put(st, body).await,
         "signal" => signal(st, body),
         "typing" => typing(st, caller, body),
         "status" => status(st, body).await,
@@ -227,6 +251,16 @@ async fn put(st: &Arc<NodeState>, body: &Value) -> Result<Value, ApiError> {
     if let (PutOutcome::Stored, Some(ct)) = (outcome, ct_copy) {
         presence::after_store(st, mailbox, id, ts, ct, push_id);
     }
+    Ok(json!({"status": if outcome == PutOutcome::Stored { "stored" } else { "duplicate" }}))
+}
+
+/// Stráž schránky (§15.13): příjemce musí být anchorem `inbox_id(pk)` a stráž sám ověří.
+async fn guard_put(st: &Arc<NodeState>, body: &Value) -> Result<Value, ApiError> {
+    let guard = crate::guard::Guard::from_json(body).ok_or(DataError::BadRequest("invalid guard"))?;
+    if !data::is_anchor(st, &guard.inbox()) {
+        return Err(ApiError::new(403, "forbidden", "not an anchor of this inbox"));
+    }
+    let outcome = crate::guard::put_local(st, &guard).await?;
     Ok(json!({"status": if outcome == PutOutcome::Stored { "stored" } else { "duplicate" }}))
 }
 

@@ -10,9 +10,9 @@ Decentralizovaná síť pro E2E šifrované zprávy. Nody provozuje kdokoli, nik
 - **Cloudflare mimo data plane**: Worker klientovi jen jednou řekne, na který node se připojit. Pak klient komunikuje výhradně s nodem.
 - **Skrytí IP**: nody jsou za Cloudflare subdoménou (IP nodu zná jen Cloudflare). Node nikdy nedostane IP uživatele.
 - **Bezpečnost před pohodlím**: node vidí jen ciphertext pod blinded identifikátory.
-- **Implementace**: nody a CLI klient v Rustu, Worker v TypeScriptu.
+- **Implementace**: nody a CLI klient v Rustu, Worker v TypeScriptu, grafický klient pro Android a desktop v Tauri 2 s jádrem v Rustu a UI v TypeScriptu (sekce 13).
 
-Mimo rozsah tohoto dokumentu: mobilní klient, UI, tokenová ekonomika.
+Mimo rozsah tohoto dokumentu: iOS, tokenová ekonomika (další vynechané části klienta jsou v 13.15).
 
 ## 2. Co v současném prototypu (Node.js) nefunguje
 
@@ -58,12 +58,12 @@ Tok:
 
 ### Uživatelé
 Cloudflare k požadavku přidává `CF-Connecting-IP`, `X-Forwarded-For`, `True-Client-IP` a podobné hlavičky. Operátor nodu by je viděl, proto:
-- **Varianta A (doporučená)**: Transform Rule odstraňující hlavičky s IP návštěvníka, **omezená výrazem na hostname `node-*.<doména>`**. Managed transform „Remove visitor IP headers“ platí pro celou zónu, takže na sdílené (firemní) zóně by změnil chování ostatních služeb a nepoužívá se. Žádný Worker v data plane, nejlevnější a nejrychlejší. **[ověřit]**, že pravidlo pokrývá WebSocket upgrade a že nic neprosakuje.
+- **Varianta A (doporučená)**: Transform Rule odstraňující hlavičky s IP návštěvníka, **omezená výrazem na hostname `node-*.<doména>`**. Managed transform „Remove visitor IP headers“ platí pro celou zónu, takže na sdílené (firemní) zóně by změnil chování ostatních služeb a nepoužívá se. Žádný Worker v data plane, nejlevnější a nejrychlejší. **Změřeno v C3: pravidlo IP neskryje.** Odstraní jen hlavičky podvržené klientem; `cf-connecting-ip` a `x-forwarded-for` (od `cloudflared`) s reálnou IP na origin dorazí vždy (sekce 9, bod 1). Varianta A tedy stačí jen pro vlastní nody.
 - **Varianta B**: gateway Worker před nodem, který hlavičky sestaví sám. Největší kontrola, ale Worker je v data plane, přidává latenci a účtuje se.
 - Ticket je vázaný na ephemeral klíč klienta, ne na IP.
 
 ### Důsledky
-- IP uživatele zná jen Cloudflare. Cloudflare je jediný bod, který vidí metadata sítě.
+- IP uživatele zná Cloudflare a (podle měření C3) i operátor nodu, ke kterému se klient připojí. Pro otevřenou síť je nutné rozhodnout o variantě B (sekce 9, bod 1).
 - Měření (bandwidth, RTT, witnessy) probíhá přes Cloudflare, měří se tedy to, co dostane klient.
 - **[ověřit]** limity počtu Tunnelů a DNS záznamů na účet, podmínky Cloudflare pro WebSocket provoz, případně sdílený tunnel s routingem podle hostname.
 
@@ -95,7 +95,7 @@ Principy: `claimed_specs` se nevěří. Efektivní kapacita = `min(claimed, meas
 
 | Zdroj | Mechanismus |
 |---|---|
-| RAM + storage | **Proof of Space s Merkle commitmentem.** Worker pošle seed, node vygeneruje memory-hard tabulku N MB/GB a pošle Merkle root. Worker vyzve k *k* náhodným listům s deadlinem v řádu ms, node vrátí list + Merkle path, Worker ověří *k* hashů. Latence odliší RAM, disk a „počítám za běhu“. Opakuje se s novým seedem. |
+| RAM + storage | **Proof of Space s Merkle commitmentem.** Worker pošle seed, node vygeneruje memory-hard tabulku N MB/GB (každý blok závisí na předchozím a na 4 náhodných dřívějších) a pošle Merkle root. Worker vyzve k *k* náhodným listům s deadlinem v řádu ms, node vrátí list + Merkle path, Worker ověří *k* hashů. Latence odliší RAM, disk a „počítám za běhu“. Opakuje se s novým seedem. |
 | CPU | **Časovaný sekvenční hash-chain.** Node vrátí checkpointy, Worker přepočítá jen pár náhodných krátkých segmentů. Čas odpovědi = single-thread skóre. Multi-core: paralelní nezávislé řetězy. |
 | Bandwidth | (a) download náhodného blobu z **R2** (egress zdarma) přes presigned URL, Worker ověří hash; (b) upload omezeného blobu; (c) **peer witnessy**: Worker náhodně vybere 2–3 nody z různých ASN, ti navzájem změří throughput a pošlou podepsané reporty, skóre = medián. |
 | Latence / region | RTT z Cloudflare colo při challenge a RTT hlášené klienty (agregované). Region je naměřený, ne tvrzený. |
@@ -212,20 +212,29 @@ Cena: operátor anchoru profilu vidí, že adresa `pk` existuje a kdy aktualizov
 | DoS na Worker | Cloudflare edge, KV cache, Turnstile, hashcash |
 | Kompromitace Workeru | nečte obsah; budoucí multi-signer adresář |
 | Cloudflare jako jediný bod | akceptované riziko; vidí IP a metadata, ne obsah |
+| Chyba nebo škodlivá závislost v UI klienta | klíče jen v Rustu, WebView bez sítě (CSP), IPC jen s allowlistem (13.3, 13.5) |
+| Screenshot, nahrávání, čtení obrazovky na zařízení | `FLAG_SECURE`, ochrana přístupnostních dat, content protection na desktopu; ne proti rootu a kompromitovanému OS (13.9) |
+| Ztráta nebo krádež zařízení | šifrované úložiště, klíč v Keystore/keychainu, volitelné heslo a zámek (13.6) |
+| Push `up` zneužitý k útoku na cizí URL | jen `https:443`, jméno hostitele, bez redirectů, limit per hostitel (13.8) |
 
 ## 9. Otevřené body
 
 1. Managed transform vs gateway Worker pro odstranění IP uživatele (včetně WebSocket).
 2. Tunnel na node vs sdílený tunnel; limity účtu.
-3. Parametry Proof of Space: velikost tabulky, počet výzev *k*, deadline.
+3. ~~Parametry Proof of Space~~ vyřešeno měřením (níže): blok odkazuje na 4 dřívější bloky místo jednoho (`spec/PROTOCOL.md` §9.2), *k* = 16 otevření, tabulka `ram` 2^16–2^22 bloků (2–128 MiB), `storage` 2^18–2^26 (8 MiB – 2 GiB), deadline `ram` 150 ms a `storage` 1000 ms (`prod`, `open`). Důkaz je dolní mez s několikanásobnou tolerancí, ne přesné číslo. RAM od NVMe neodliší.
 4. Skutečná cena heartbeatů přes DO WebSocket.
 5. Zda gateway/Tunnel provoz zprávové aplikace vyhovuje podmínkám Cloudflare.
 6. Multi-signer adresář: kdy a jak.
-7. Chování při split-brain (nody se nevidí, ale vidí Worker) a expirace adresáře při dlouhém výpadku Workeru.
+7. ~~Split-brain a expirace adresáře~~ vyřešeno (`spec/PROTOCOL.md` §6.1): nody v heartbeatu hlásí peery, na které se opakovaně nedovolaly. Worker hlášení nevěří, jen podle něj sám ověří `GET /health` přes tunel a node, který dvakrát neprojde, vyřadí z dalšího adresáře i routingu (nejvýše třetinu živých nodů). Adresář nemá expiraci: při výpadku Workeru epocha zamrzne, připojení klienti si píší dál a noví čekají na tickety. Node, který zmeškal epochu, si novější adresář stáhne od peeru, který mu odpoví `403` (podpis Workeru, `/n/directory`). Ověření dělá Worker sám, ne vybraní nody: jde stejnou cestou jako nody (Cloudflare → tunel) a Sybil ho neovlivní.
 8. ~~Konfliktní model mailboxu při zápisu s kvorem 2~~ vyřešeno v B3: zápis je idempotentní podle `(mailbox_id, id)`, doručení je náhrobek a „doručeno“ vyhrává, pořadí je podle `(ts, id)`, čtení sjednocuje odpovědi `r − quorum + 1` anchorů (`spec/PROTOCOL.md` §13).
 9. Perzistence klíče a dat nodu na Flux (instance se může přesunout na jiný stroj; ztráta klíče znamená nový `node_id` a ztrátu anchorů).
 10. Velikost sítě nad stovky nodů: shardování registru (DO) a frekvence epoch. Pro 3–20 nodů se neřeší.
-11. ~~Post-compromise security~~ vyřešeno: Double Ratchet s DH krokem (`spec/PROTOCOL.md` §13.2, klient `node/crates/ancord-node/src/ratchet.rs`). Zbývá šifrování hlavičky ratchetu (anchor vidí `dh`, `pn`, `n`, `seq`) a uzdravení jednostranných konverzací (prázdná „keepalive“ zpráva). Dále spam do schránky (`inbox`) a ztráta klíčů zařízení (záloha vs. forward secrecy).
+11. ~~Post-compromise security~~ vyřešeno: Double Ratchet s DH krokem, šifrovanou hlavičkou (anchor nevidí `dh`, `pn`, `n`, `seq`) a keepalive zprávou pro uzdravení jednostranných konverzací (`spec/PROTOCOL.md` §13.2, klient `node/crates/ancord-node/src/ratchet.rs`, keepalive v `ancord-cli`). Spam do schránky (`inbox`) zdražuje stráž s proof-of-work (§15.13, `guard.rs`); plně ho nezastaví. Zbývá ztráta klíčů zařízení (záloha vs. forward secrecy).
+12. Klient: výkon systémového WebView (zejména WebKitGTK na Linuxu a starší Android System WebView) proti rozpočtu v 13.11. **[ověřit]** v D1 a D3, rozhodnout o minimální verzi WebView.
+13. Klient: zda lze na Androidu spustit `sync_once` z receiveru bez Activity a WebView v Tauri mobile (13.10). **[ověřit]** prototypem na začátku D6; podle výsledku JNI most nebo neviditelná Activity.
+14. Klient: dostupnost a chování `setAccessibilityDataSensitive` (API 34), `setContentSensitivity` (API 35) a `setHideOverlayWindows` (API 31) na reálných zařízeních a v WebView. **[ověřit]** v D6, výsledek do `THREAT_MODEL.md`.
+15. Klient: UnifiedPush `up` v Workeru (13.8): přesný tvar endpointů distributorů, zda stačí prosté `POST` bez šifrování WebPush, a limit per hostitel. **[ověřit]** v D7 proti ntfy.
+16. Klient: Secret Service na Linuxu bez desktopového prostředí (režim s heslem jako náhrada) a `PR_SET_DUMPABLE`/WER bez `unsafe`. **[ověřit]** v D2 a D5.
 
 **Měření C3 (2026-10-29, 6 nodů v Dockeru za vlastními tunely, zóna Free, Worker `prod`):**
 - **Bod 1, IP uživatele:** změřeno echo serverem za tunelem nodu, u běžného GET i u WebSocket upgrade stejně. Transform Rule `ancord_strip_visitor_ip` funguje: hlavičky `x-forwarded-for`, `true-client-ip` a `x-real-ip` podvržené klientem na origin nedorazí. Skutečná IP uživatele ale na origin dorazí vždy, v `cf-connecting-ip` (Cloudflare ji pravidlem odstranit nedovolí) a v `x-forwarded-for`, kterou přidává až `cloudflared`. Dále dorazí `cf-ipcountry`. **Varianta A tedy IP před provozovatelem nodu neskryje**, jen před cizími hlavičkami. Node tyto hlavičky nečte ani neloguje. U vlastních (genesis) nodů je to přijatelné, pro otevřenou síť je potřeba gateway Worker (varianta B) nebo jiný transport. Rozhodnutí je otevřené.
@@ -235,6 +244,22 @@ Cena: operátor anchoru profilu vidí, že adresa `pk` existuje a kdy aktualizov
 - **Funkčně:** všech 6 nodů `active` a `live`, `https://node-<id>.melonet.cz/health` 100–220 ms, zpráva klient → WSS → gateway → 2 anchory → příjemce, po vypnutí gateway nodu se další zprávy doručí přes jiné nody.
 - **Bod 5 (podmínky Cloudflare)** se měřením neověří, zůstává otevřený.
 - Chyba nalezená až na skutečném Cloudflare: `fetch` uložený v objektu a volaný jako metoda selže ve workerd s `Illegal invocation`. Opraveno a testovací fetchery to nyní hlídají.
+
+**Měření bodu 3 (2026-10-29, `node/crates/ancord-node/examples/space_bench.rs`, 24 jader, NVMe, release build):**
+- **Poctivý node** (4 odkazy): stavba 2^22 v RAM 1,7 s, otevření 16 indexů 0,2 ms. Storage 2^22 11,6 s, 2^26 (2 GiB tabulka + 2 GiB strom) 205 s. Otevření z page cache 1,5–1,9 ms, ze studeného NVMe 55–74 ms (vyprázdněno `posix_fadvise(DONTNEED)`). S jedním odkazem byla stavba 2^26 65 s a studené otevření ~34 ms. Pomalejší stavbu dělají čtyři `pread` po 32 B na blok, proto `commitTimeoutMs` v `prod` a `open` je 1800 s.
+- **Útočník s částí tabulky** (drží každý *s*-tý blok, chybějící dopočítá; tabulka 2^22, nejdražší z 16 nezávislých otevření, tj. paralelní útočník):
+
+  | uloženo | 1 odkaz (původní) | 4 odkazy |
+  |---|---|---|
+  | 1/2 | ~10 hashů | ~7 tisíc |
+  | 1/3 | ~150 | ~190 tisíc |
+  | 1/4 | ~2 tisíce | ~500 tisíc |
+  | 1/8 | ~160 tisíc | ~1,8 milionu |
+  | 1/16 | ~1 milion | ~2,8 milionu |
+
+  Jedno jádro spočte ~3,4 milionu hashů za sekundu (4 odkazy), resp. ~5,5 milionu (1 odkaz). Při deadlinu 150 ms tak s původní konstrukcí prošel útočník s **osminou** deklarované RAM. Se čtyřmi odkazy mu stačí nejméně třetina až čtvrtina a s osminou už neprojde. Delší deadline storage (1000 ms) nechává útočníkovi víc času, ale tabulka 2^26 má i dražší dopočítání.
+- **Co nepomohlo:** řetězení otevření (další index z předchozího listu). Útočník počítá postupně, ale memo dopočítaných bloků sdílí, takže 64 řetězených otevření stojí jen ~3× víc než 16 paralelních. Zkrácení deadlinu pod nejistotu RTT nejde a poctivé otevření (0,2 ms) je tak rychlé, že ani nejkratší rozumný deadline útočníka nezastaví. Prodražit by ho mohl jen pomalý hash na blok, a ten by stejně zpomalil i poctivou stavbu.
+- **Důsledek:** kapacita z Proof of Space je dolní mez s tolerancí zhruba 3–4×, vrstvy `ram` a `storage` se liší jen deadlinem a NVMe projde i jako RAM. Na váhu nodu má vliv jen ve dvou dimenzích (0,2 + 0,2) se stropem `ratioCap`. Pro load balancing to stačí, pro odměňování podle kapacity ne. **[ověřit]** jitter RTT WebSocketu přes tunel na skutečné síti: kdyby byl pod ~20 ms, šlo by deadline `ram` snížit.
 
 **Blokující body** jsou 1, 2 a 5. Ověřit je prototypem (viz fáze 0) dřív, než vznikne další kód.
 
@@ -272,6 +297,7 @@ Stejný kód běží na 3 i na 9+ nodech. Parametry jsou v konfiguraci (profil),
 4. Data plane: mailboxy, HRW anchory, replikace, ratchet, handoff.
 5. Push přes Worker.
 6. Hardening: fuzzing, simulace Sybil a lhaní, load test, cenový model.
+7. Klient pro Android a desktop (sekce 13, milníky D0–D8 v 13.14).
 
 ## 12. Pokyny pro implementaci (pro Claude Code)
 
@@ -288,7 +314,8 @@ ancord/
 │   ├── THREAT_MODEL.md
 │   └── test-vectors/      sdílené testovací vektory (JSON) pro Worker i node
 ├── worker/                load balancer + control plane (Cloudflare Worker, TypeScript)
-├── node/                  node (Rust)
+├── node/                  node (Rust); od fáze D i sdílené jádro klienta `crates/ancord-core`
+├── client/                grafický klient Android + desktop (Tauri 2, Svelte, TypeScript), fáze D, viz 13.12
 └── dev/
     ├── docker-compose.yml 6 nodů
     ├── .env.example       bez tajemství
@@ -303,7 +330,7 @@ ancord/
 2. **Po milnících.** Každý milník níže má kritérium přijetí a je hotový až po jeho splnění v běžícím prostředí, ne jen po úspěšné kompilaci.
 3. **Body označené [ověřit] se zjišťují prototypem**, ne předpokladem. Výsledek se zapíše do sekce 9 (otevřené body) i s naměřenými čísly.
 4. **Parametry v konfiguraci** podle profilů v sekci 10 (`R`, kvorum, epocha, probation…), nic natvrdo.
-5. **Nepřidávat nic mimo rozsah** (mobilní klient, UI, tokenová ekonomika). Při nejasnosti se zeptat, nehádat.
+5. **Nepřidávat nic mimo rozsah** (iOS, tokenová ekonomika, body z 13.15). Klient (sekce 13) je v rozsahu až od fáze D. Při nejasnosti se zeptat, nehádat.
 6. Rust: `cargo clippy` a `cargo test` bez varování, žádné `unwrap` v produkční cestě. TypeScript: `strict`, testy přes vitest s Miniflare/workerd.
 7. Kód a komentáře odpovídají okolnímu kódu. Dokumentace v češtině, identifikátory anglicky.
 
@@ -328,7 +355,7 @@ Vývoj běží na firemní zóně **`melonet.cz`** (sdílená zóna s existujíc
 
 **Stav (parita s `melo`, §6.4):** identita uživatele, profily na anchorech, X3DH s obálkou ve schránce, typing, stav doručení, dávkové odběry a lokální historie jsou implementované v `node/` (včetně CLI) a otestované v `tests/dataplane.rs`, `tests/e2e.rs` a ve vektoru `pairwise.json`. Nic není nasazeno.
 
-**Stav (uživatelský tok před fází C):** adresa `ancord:<pk>` (text, QR), push klíče schránky (v profilu) a konverzací (ze sdíleného tajemství, vektor `pairwise.json`), registrace tokenu z CLI (`push-register`) a online klient (`ancord online`: jedno spojení, schránka i konverzace, automatické přijetí kontaktů, znovupřipojení s novým `/route`). E2E test ověřuje celý tok: první kontakt vzbudí offline příjemce, po připojení přijme kontakt a zprávy živě, po odpojení ho další zpráva vzbudí znovu. Soubory klíčů a konverzací jsou zamčené, aby dva procesy nepoužily stejný klíč ratchetu dvakrát. Mobilní klient (skenování QR, FCM/APNs token) zůstává mimo rozsah.
+**Stav (uživatelský tok před fází C):** adresa `ancord:<pk>` (text, QR), push klíče schránky (v profilu) a konverzací (ze sdíleného tajemství, vektor `pairwise.json`), registrace tokenu z CLI (`push-register`) a online klient (`ancord online`: jedno spojení, schránka i konverzace, automatické přijetí kontaktů, znovupřipojení s novým `/route`). E2E test ověřuje celý tok: první kontakt vzbudí offline příjemce, po připojení přijme kontakt a zprávy živě, po odpojení ho další zpráva vzbudí znovu. Soubory klíčů a konverzací jsou zamčené, aby dva procesy nepoužily stejný klíč ratchetu dvakrát. Grafický klient (skenování QR, push token) je návrh v sekci 13 (fáze D), zatím bez kódu.
 
 **Stav (fáze C):** C1, C2 a C3 splněné 2026-10-29. Worker `ancord` běží na `https://ancord.melonet.cz` (profil `prod`, `CLOUDFLARE_MODE=real`, `PUSH_MODE=log`), veřejný klíč Workeru `MpUwUO74HgS5ZvLi1guR_aajIEZCoP4olm6gKlfnIo0` (v `dev/.env.example`). Vytvořeno: KV `ancord-routing` a `ancord-push`, R2 `ancord-bw-blobs`, fronty `ancord-push` a `ancord-push-dlq`, Transform Rule `ancord_strip_visitor_ip` (jen `node-<16>.melonet.cz`), custom domain, užší token Workeru `CF_API_TOKEN` (vytvořil uživatel). Šest nodů z `dev/docker-compose.yml` se zaregistrovalo, vytvořily se jim tunely a DNS a jsou dosažitelné bez příchozích portů. Výsledky měření jsou v sekci 9. Testovací nody běžely v dočasném prostředí, trvalý provoz potřebuje vlastní server (`dev/README.md`) a nový `GENESIS_NODE_IDS`.
 
@@ -371,3 +398,225 @@ Pokud limity počtu tunelů nebo DNS záznamů nestačí, rozhodne se o sdílen�
 - Žádný kontejner nepublikuje port na hostitele. Dosažitelnost je pouze přes tunel, aby se ověřilo chování bez veřejné IP.
 - Profil `dev` (sekce 10): genesis allowlist zapnutý, probation, hashcash a limity ASN vypnuté, peer witnessy vypnuté.
 - `dev/README.md` popisuje: nastavení `.env`, `docker compose up`, kontrolu registrace, vypnutí jednoho nodu pro test failoveru.
+
+## 13. Klient (Android a desktop)
+
+Grafický klient pro Android a desktop (Windows, macOS, Linux). Jeden kód, jádro v Rustu, UI v TypeScriptu a CSS. Protokol se nemění (kromě jediného rozšíření push, viz 13.8); klient je stejný uživatel sítě jako dnešní CLI (`ancord online`, §6.4).
+
+### 13.1 Cíle a pořadí priorit
+1. **Bezpečnost klíčů a obsahu.** Klíče a stav ratchetu nikdy neopustí Rust proces a UI k nim nemá přístup.
+2. **Žádná telemetrie.** Klient mluví jen s Workerem a nody. Žádná analytika, crash reporty, Firebase Analytics, fonty ani skripty z internetu, žádný automatický updater, který by se ptal na verzi.
+3. **Ochrana proti čtení obrazovky** tam, kde to platforma dovolí (13.9). Co platforma nedovolí, se píše do `THREAT_MODEL.md`, ne do slibů.
+4. **Rychlost a malá velikost.** Rozpočet v 13.11 se měří a hlídá, ne jen deklaruje.
+5. **UI jako běžný web.** TypeScript a CSS, žádný jazyk ani styling engine navíc.
+
+### 13.2 Volba technologie
+
+| Vrstva | Volba | Důvod |
+|---|---|---|
+| Shell | **Tauri 2** (desktop i Android) | Jeden kód pro obě platformy, systémový WebView místo vlastního Chromia (instalátor jednotky MB), Rust jádro v procesu, vestavěné `set_content_protected` pro desktop a plugin systém s Kotlinem pro Android |
+| UI | **Svelte 5 + TypeScript (`strict`) + čisté CSS** (custom properties jako design tokeny), build Vite | Kompilátor místo runtime s virtuálním DOM, malý bundle, rychlý start. Žádný CSS framework ani knihovna komponent |
+| Jádro | **Rust**, crate `ancord-core` sdílený s nodem | Viz níže |
+| Úložiště | **redb** s šifrováním po záznamech (13.6) | Stejné jako na nodu, čistý Rust, bez C závislosti (SQLCipher/OpenSSL by ztížilo křížovou kompilaci na Android) |
+
+**Proč Rust a ne celé v TypeScriptu.** Čisté TS by šlo, ale: (a) privátní klíče a stav ratchetu by žily v heapu WebView, který nejde spolehlivě vynulovat a který čte kód celého UI i všech jeho závislostí, kdežto Rust drží klíče v `zeroize` strukturách a UI volá jen příkazy typu `message_send`; (b) šifrování, ratchet, X3DH a formáty jsou už napsané a otestované proti `spec/test-vectors/` v `node/`, druhá implementace v TS by znamenala druhý zdroj chyb a rozcházení s protokolem; (c) celá síť jde mimo WebView, takže odpadá velká část cest, kudy by mohla uniknout data.
+
+**Zvažované a zamítnuté.**
+
+| Možnost | Důvod zamítnutí |
+|---|---|
+| Electron | 150 MB+, vlastní Chromium, Android nepodporuje |
+| Flutter, Compose Multiplatform | Rychlé, ale UI není TypeScript a CSS |
+| React Native | Desktop slabý, navíc JS engine s klíči v paměti |
+| Slint, Iced, egui | Nejmenší a nejrychlejší, ale bez CSS a TS (požadavek 5) |
+| Dioxus | Stejný WebView jako Tauri, UI by se psalo v Rustu |
+| Čistý TS v Capacitoru | Klíče v JS, duplicitní implementace protokolu (viz výše) |
+
+**Slabiny Tauri, které se přijímají.** Výkon a funkce závisejí na systémovém WebView: Android System WebView, WebView2 (Windows), WKWebView (macOS), WebKitGTK (Linux, nejslabší). Na Androidu se při startu kontroluje minimální verze WebView (parametr, výchozí hodnotu určí D6) a při nižší verzi aplikace vysvětlí proč nejede. Tauri Android je mladší než desktop, proto D6 začíná prototypem (13.10).
+
+### 13.3 Vrstvy a hranice důvěry
+
+```
+┌──────────────────────────── proces aplikace ────────────────────────────┐
+│  WebView (nedůvěryhodné)          Rust (důvěryhodné)                     │
+│  Svelte + TS + CSS   ──IPC────►   src-tauri: příkazy, události           │
+│  CSP, bez sítě                         │                                 │
+│                                   ancord-core (sdílený s nodem)          │
+│                                     identita, X3DH, ratchet, profil,     │
+│                                     kanál (ChaCha20-Poly1305), online    │
+│                                     session, sync_once, úložiště         │
+│                                        │                                 │
+│                                   síť (reqwest + tokio-tungstenite)      │
+└────────────────────────────────────────┼─────────────────────────────────┘
+                                         ▼  Worker (/route, push-reg) a nody (WSS)
+```
+
+- **WebView je nedůvěryhodný.** Předpokládá se, že kód UI nebo závislost může být chybná. Proto UI nedostane klíče, ticketů ani adresy nodů, jen to, co zobrazuje: text zprávy otevřené konverzace, jména, stavy.
+- **Síť výhradně v Rustu.** CSP WebView zakazuje spojení kamkoli kromě IPC. Test v D1 to ověří (`fetch` z UI musí selhat).
+- **Kořeny důvěry**: veřejný klíč Workeru (`WORKER_PUBKEY`) a URL Workeru jsou zapečené při buildu podle profilu (dev/prod, sekce 10). Přepsat je lze jen v debug buildu.
+- **TLS kořeny**: webpki-roots zabalené v aplikaci, ne systémové úložiště (Android trust store se liší podle výrobce a uživatel do něj může přidat CA).
+
+### 13.4 Jádro: crate `ancord-core`
+
+Dnes je klientská logika (`client.rs`, `user.rs`, `ratchet.rs`, `channel.rs`, `profile.rs`, `ticket.rs`, `encoding.rs`, `canonical.rs`, `sign.rs`, `hashcash.rs`, `hrw.rs`) uvnitř `ancord-node`, což táhne `axum`, `redb` a `sysinfo` i do klienta. Milník D0 ji vyčlení:
+
+- `node/crates/ancord-core`: sdílené, bez serverových závislostí (`axum`, `sysinfo`, `supervisor`, `tunnel`). Obsahuje protokolové primitiva a **klientskou stranu**.
+- `ancord-node` a `ancord-cli` na `ancord-core` závisejí. Žádná změna chování, `cargo test` v `node/` se musí chovat stejně (včetně `tests/e2e.rs` a `tests/dataplane.rs`) a vektory ze `spec/test-vectors/` prochází tytéž.
+- **Perzistence za rozhraním.** CLI dnes ukládá klíče a konverzace do zamčených souborů. `ancord-core` dostane trait (`Store`: identita, konverzace/ratchet, zprávy, nastavení) s dvěma implementacemi: souborovou pro CLI a šifrovaným redb pro klienta (13.6). Rozhodnutí o rozsahu rozhraní padne v D0 podle toho, co kód skutečně potřebuje.
+- **Online session** (`ancord online` z CLI, spec §15.12) se přesune do jádra jako samostatný typ (`OnlineSession`): `/route`, připojení, zveřejnění profilu, `subscribe`, zprávy jako stream událostí, znovupřipojení s novým `/route`.
+- **`sync_once`** (nové): jednorázové vyzvednutí po wake: `/route` → připojení → `subscribe` + `fetch` → uložení → `ack` → odpojení, s tvrdým časovým limitem (výchozí 20 s). Používá ho Android při probuzení pushem (13.8). Ack se posílá až po trvalém uložení zprávy a stavu ratchetu (doručení je *at least once*, duplicity se zahazují podle `id`, §6.3).
+- **Jeden vlastník stavu.** Stav ratchetu smí měnit jen jeden proces a v něm jeden `Core` pod zámkem. Na desktopu se to vynucuje single-instance zámkem aplikace, na Androidu je UI i `sync_once` ve stejném procesu. Stejný problém řešil u CLI zámek souborů.
+- `unsafe_code = forbid` zůstává. Kód, který ho potřebuje (JNI na Androidu), je v samostatném crate klienta s lokální výjimkou (13.10).
+
+### 13.5 UI a IPC kontrakt
+
+UI nikdy nedostane nic, co není zobrazení. Kontrakt je definovaný jednou, v TypeScriptu typovaně (generované typy z Rust struktur, např. `ts-rs` nebo `specta` [ověřit v D1]), a testuje se z obou stran.
+
+**Příkazy (UI → Rust)**
+
+| Skupina | Příkazy |
+|---|---|
+| Identita | `identity_status`, `identity_create`, `address_get` (`ancord:<pk>`), `address_qr` (SVG) |
+| Kontakty | `contact_add(address)`, `contact_list`, `contact_safety_number(id)`, `contact_mark_verified(id)` |
+| Konverzace | `conversation_list`, `conversation_open(id, before?, limit)`, `message_send(id, text)`, `typing_set(id, on)`, `conversation_delete(id)` |
+| Stav | `connection_state`, `settings_get`, `settings_set` |
+| Zámek | `lock`, `unlock(passphrase?)` |
+
+**Události (Rust → UI)**: `message_received`, `delivery_state` (`pending`/`delivered`/`unknown`, §6.4), `typing`, `connection_state`, `contact_request` (nový kontakt přijatý z obálky).
+
+**Pravidla pro UI**
+- Zprávy se zobrazují jako **čistý text**. Žádný HTML ani Markdown, žádné automatické načítání odkazů, náhledů ani obrázků. Odkazy se otevírají v systémovém prohlížeči až po potvrzení.
+- Žádné webové fonty a ikony ze sítě: systémové fonty a ikony zabalené v bundlu.
+- Seznam zpráv je virtualizovaný (vlastní malá implementace, bez knihovny).
+- **Tauri capabilities**: jen vlastní příkazy aplikace a `core:event`. Pluginy `fs`, `shell`, `http`, `opener` (kromě potvrzených odkazů), `updater` a `global-shortcut` se nepřidávají. `withGlobalTauri` je vypnuté, DevTools jen v debug buildu.
+- **CSP** (výchozí návrh, ověří se v D1): `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost`. Bez `unsafe-inline` a `unsafe-eval`.
+- Přístupnost: sémantické HTML, popisky, klávesnice. Ochrana před čtečkami (13.9) je přepínač, ne výchozí vypnutí přístupnosti bez vědomí uživatele.
+
+### 13.6 Úložiště a klíče
+
+- **Jeden soubor redb na profil**, tabulky: `identity`, `conversations` (stav ratchetu), `messages` (klíč `(conv_id, ts, id)`), `settings`.
+- **Šifrování po záznamech**: hodnota je XChaCha20-Poly1305, klíč tabulky `HKDF(master_key, "ancord/v1/client/" ‖ tabulka)`, AAD = tabulka ‖ klíč záznamu. Čas a ID konverzace v klíči zůstávají čitelné (záznam zná jen lokální útočník, který má stejně přístup k souboru); text, odesílatel a ratchet ne.
+- **`master_key`** (32 B náhodných) je zabalený klíčem platformy:
+  - Android: klíč v **Android Keystore** (StrongBox, je-li k dispozici), AES-GCM wrap, Kotlin plugin;
+  - Windows: DPAPI; macOS: Keychain; Linux: Secret Service (`keyring`) [ověřit na stroji bez Secret Service, tam se nabídne režim s heslem].
+- **Režim s heslem** (volitelný): `master_key` se navíc zabalí klíčem z hesla (Argon2id). Cena: na pozadí nelze zprávy dešifrovat, takže wake na Androidu ukáže jen generické oznámení a zprávy se vyzvednou po odemknutí.
+- **Zámek aplikace**: UI se po nečinnosti zamkne. Na Androidu volitelně biometrika (BiometricPrompt) před zobrazením UI. Zámek chrání zobrazení, klíč v Keystore je pro wake dostupný stále (bez vazby na biometrii), jinak by nešlo vyzvedávat na pozadí.
+- **Citlivé buffery** v Rustu mají `zeroize`. Bez `mlock` (kvůli `unsafe_code = forbid`).
+- **Nikde se neloguje** obsah zpráv, klíče ani tickety. Release build loguje jen události bez obsahu a na Androidu žádné citlivé řetězce nejdou do logcatu.
+- **Smazání**: `conversation_delete` maže záznamy v redb. Úplné smazání profilu zničí `master_key` v keystore (crypto-erase) a pak soubor.
+- Záloha a více zařízení: mimo v1 (otevřený bod 11 v sekci 9). Ztráta zařízení znamená ztrátu identity.
+
+### 13.7 Síť a životní cyklus spojení
+
+- **Popředí** (desktop i Android): `OnlineSession` drží WSS na gateway, zprávy chodí živě, presence na anchorech. Ping po 25 s nečinnosti (idle timeout tunelu 125 s, sekce 9).
+- **Pozadí, desktop**: aplikace zavřená do tray drží spojení dál (volba, výchozí vypnuto spolu s autostartem). Zavřená úplně = offline, zprávy čekají na anchorech. Wake push na desktop se nepodporuje (není token).
+- **Pozadí, Android**: Android síťová spojení v pozadí ruší. Spojení tedy zaniká s procesem, presence na anchorech vyprší a příchozí zpráva spustí wake push (13.8) → `sync_once`.
+- **Cache adresáře**: poslední podepsaný adresář nodů se drží v úložišti, takže při výpadku Workeru se klient připojí na dřív známé nody (§5.3).
+- **Offline odesílání**: `message_send` zprávu uloží lokálně jako `queued` a odešle, jakmile je spojení. Stav doručení se dotazuje na anchorech (§6.4).
+- Proxy a Tor: mimo rozsah. IP uživatele vidí Cloudflare (sekce 4 a 8), node ne (a podle měření C3 ji u otevřené sítě vidí provozovatel nodu v hlavičkách, bod 1 v sekci 9; klient na to nemá vliv).
+
+### 13.8 Push (Android)
+
+Dnes Worker umí platformy `fcm` a `apns` (`worker/src/push/senders.ts`, spec §10). Pro klienta bez Google závislostí se přidává **UnifiedPush**:
+
+- **Spec (nejdřív, pravidlo 12.2/1)**: `platform` v `POST /push/register` dostane hodnotu `up`. `token` je pak URL endpointu distributora (UnifiedPush, např. ntfy), `https`, max 4096 znaků. Worker při wake udělá `POST` na tuto URL s pevným tělem `wake` (hlavičky `TTL: 60`, `Urgency: high`), odpověď ignoruje, `404` a `410` záznam smaže. Obsah push je stále pevný, stejně jako u FCM a APNs.
+- **Ochrana Workeru jako odesílatele (SSRF a zesílení).** Registrovat token smí kdokoli s libovolným push klíčem, takže útočník by mohl nasměrovat wake na cizí URL. Worker proto: přijímá jen `https` na portu 443, jméno hostitele (ne IP literál, ne `localhost`/interní přípony), `redirect: "manual"`, vlastní limit **per hostitel** (kromě limitu per `push_id` a per node) a krátký timeout. Test vektory a testy ve Workeru pokryjí odmítnuté URL a limit.
+- **Tok na zařízení**: Kotlin `MessagingReceiver` (UnifiedPush) → předá `wake` do Rustu → `sync_once` → lokální oznámení. Klient registruje stejný endpoint pod všemi svými `push_id` (schránka + každá konverzace, §15.11), jako dnes u FCM tokenu.
+- **Oznámení**: výchozí text je jen „Nová zpráva“, bez odesílatele a bez obsahu, viditelnost `VISIBILITY_PRIVATE`. Náhled obsahu je volba uživatele. V režimu s heslem (13.6) je oznámení vždy generické.
+- **Co distributor vidí**: čas wake a IP Workeru, ne obsah ani `push_id` odesílatele. U FCM by to byl Google (timing, token); proto je FCM jen volitelný pozdější doplněk (Worker ho už umí), ne součást v1.
+- **Bez distributora** (UnifiedPush aplikace není nainstalovaná): nabídne se volba „Trvalé spojení“, foreground služba drží `OnlineSession` s trvalým oznámením. Stojí baterii, proto není výchozí.
+
+### 13.9 Soukromí a ochrana proti čtení obrazovky
+
+Žádná z ochran není absolutní: root, kompromitovaný OS, fyzický snímek obrazovky kamerou ani škodlivý přístupnostní nástroj s nejvyšším oprávněním je nemusí respektovat. To patří do `THREAT_MODEL.md`.
+
+| Hrozba | Android | Windows | macOS | Linux |
+|---|---|---|---|---|
+| Screenshot, nahrávání, náhled v přehledu aplikací | `FLAG_SECURE` na okně (plugin) | `WDA_EXCLUDEFROMCAPTURE` (Tauri `set_content_protected`) | `NSWindow.sharingType = none` (stejné API) | bez ochrany (Wayland ji neumožňuje, uživatel nevyžaduje) |
+| Čtení obsahu přístupnostními službami | `setAccessibilityDataSensitive` (API 34+), na starších `importantForAccessibility` skrývající WebView; přepínač „Zvýšená ochrana“, výchozí zapnuto, s vysvětlením pro čtečky | n/a | n/a | n/a |
+| Překryvná okna a tapjacking | `Window.setHideOverlayWindows` (API 31+), `filterTouchesWhenObscured` | n/a | n/a | n/a |
+| Citlivý obsah v nahrávání a oznámeních | `View.setContentSensitivity` (API 35) [ověřit dostupnost] | n/a | n/a | n/a |
+| Klávesnice se učí z textu | `IME_FLAG_NO_PERSONALIZED_LEARNING` na vstupu zprávy, incognito režim IME | n/a | n/a | n/a |
+| Autofill | `importantForAutofill = no` | n/a | n/a | n/a |
+| Schránka | `ClipDescription.EXTRA_IS_SENSITIVE` při kopírování | historie schránky: upozornění v nastavení | n/a | n/a |
+| Cloudová záloha | `allowBackup = false`, `dataExtractionRules` bez dat | n/a | n/a | n/a |
+| Core dump, crash report | žádný crash reporter; `PR_SET_DUMPABLE=0` [ověřit bez `unsafe`] | vypnout WER pro proces [ověřit] | vypnout crash reporter | `ulimit -c 0` při spuštění |
+| Ladění WebView | `setWebContentsDebuggingEnabled(false)`, `allowFileAccess = false` v release | DevTools jen v debug | totéž | totéž |
+
+Telemetrie dále: žádná závislost, která volá ven (kontrola v D5: `cargo deny` / `cargo tree` a `npm ls` nad celým stromem, zákaz Firebase a Google Play Services v Androidu, test provozu, který zaznamená všechna odchozí spojení běžícího klienta a porovná je s povolenými hostiteli). Žádný automatický updater: aktualizace jsou podepsané balíčky, které si uživatel nainstaluje sám (kontrola verze by prozradila IP a čas).
+
+### 13.10 Platformní specifika
+
+**Android**
+- `minSdk` 26 (parametr, potvrdit v D6), jen `arm64-v8a` pro release (plus `x86_64` pro emulátor v debug).
+- Kotlin plugin Tauri (`client/src-tauri/gen/android` + vlastní plugin): `FLAG_SECURE`, nastavení přístupnosti a overlayů, Keystore wrap, UnifiedPush receiver, oznámení, skener QR (CameraX), kontrola verze WebView, biometrika.
+- **Prototyp na začátku D6 [ověřit]**: zda lze `sync_once` spustit v procesu bez vytvoření Activity/WebView (z `BroadcastReceiver`/krátké foreground služby) a zda to Tauri mobile dovolí. Pokud ne, `sync_once` poběží přes tenký JNI most v samostatném crate (`unsafe` jen tam) nebo se Activity spustí neviditelně. Výsledek se zapíše do sekce 9.
+- Oprávnění: `INTERNET`, `POST_NOTIFICATIONS`, `CAMERA` (až při skenu), případně `FOREGROUND_SERVICE` pro volitelné trvalé spojení. Nic dalšího (kontakty, poloha, úložiště se nežádají).
+
+**Desktop**
+- Single-instance zámek (stav ratchetu).
+- Tray a autostart volitelné, výchozí vypnuto. Oznámení přes systémové API, výchozí text generický (13.8).
+- Windows: WebView2 Evergreen (bootstrapper v instalátoru, Windows 11 ho má). macOS: podepsání a notarizace. Linux: balíčky `.deb`/`.AppImage`, WebKitGTK 4.1.
+
+### 13.11 Rozpočet výkonu (cíle, měří se)
+
+Čísla jsou **cíle k ověření**, ne naměřené hodnoty. Měří se v D1 (kostra), D3 (reálná data) a znovu v D8, výsledek se zapíše do sekce 9.
+
+| Metrika | Cíl |
+|---|---|
+| Instalátor desktop | < 15 MB |
+| APK (arm64) | < 20 MB |
+| JS bundle (gzip) | < 150 kB |
+| Studený start do použitelného UI, desktop | < 600 ms |
+| Studený start, střední Android | < 1,2 s |
+| Idle paměť desktop (celý proces včetně WebView) | < 150 MB |
+| Otevření konverzace s 10 000 zprávami | < 150 ms do prvního vykreslení |
+| Plynulost seznamu zpráv | 60 fps při rolování |
+| Odeslání zprávy: stisk → zobrazení lokálně | < 50 ms |
+| `sync_once` po wake | < 5 s typicky, tvrdý limit 20 s |
+
+### 13.12 Struktura `client/`
+
+```
+client/
+├── package.json, vite.config.ts, tsconfig.json   (strict)
+├── src/                      Svelte + TS + CSS
+│   ├── lib/ipc.ts            typované volání příkazů a události (generované typy)
+│   ├── lib/ui/               malé komponenty bez závislostí, virtuální seznam
+│   ├── styles/               tokeny (custom properties), světlé/tmavé téma
+│   └── routes/               seznam konverzací, konverzace, kontakty, nastavení, zámek
+├── src-tauri/                Rust shell: příkazy, události, capabilities, CSP
+│   ├── tauri.conf.json
+│   └── gen/android/          generovaný Android projekt + Kotlin plugin
+└── README.md                 build, spuštění, profily
+```
+
+`ancord-core` je v `node/crates/` (společný Cargo workspace s nodem); `client/src-tauri` na něj odkazuje cestou. `client/` nesdílí kód s `worker/`, jen `spec/` a vektory (jako node).
+
+### 13.13 Testování
+
+- **Jádro**: sdílené vektory ze `spec/test-vectors/` (už procházejí), unit testy úložiště (šifrování po záznamech, ztráta a poškození záznamu), test `sync_once` (limit, ack až po uložení, idempotence).
+- **E2E bez UI**: dva klienti na jádře proti lokálnímu `wrangler dev` a třem nodům (rozšíření `tests/e2e.rs`), včetně wake přes falešný `up` endpoint (lokální HTTP server).
+- **IPC a UI**: vitest + `mockIPC` z Tauri, test, že UI nic neposílá mimo IPC (CSP), snapshot rozpočtu bundle (selhání při překročení).
+- **Desktop smoke**: `tauri-driver` (WebDriver) na Linuxu [ověřit v D1 v tomto prostředí].
+- **Android**: instrumentovaný test na emulátoru nebo zařízení (`FLAG_SECURE` aktivní, oznámení bez obsahu, `sync_once` z receiveru). Vyžaduje emulátor s KVM nebo fyzické zařízení; pokud prostředí nemá, kritérium D6 potvrdí uživatel na zařízení a stav se zapíše.
+- Rust: `cargo clippy --all-targets -- -D warnings` a `cargo test` bez varování, žádné `unwrap` v produkční cestě (jako v `node/`). TypeScript: `strict`, `svelte-check`, vitest.
+
+### 13.14 Milníky fáze D
+
+**Fáze D: Klient, složka `client/`, jádro `node/crates/ancord-core`. Začíná po dokončení fáze B a po zapsání rozhodnutí o rozsahu do `CLAUDE.md`.** Jako ve fázích A a B se nic nenasazuje, nic se nevytváří v Cloudflare a nečte se `.env`. Vše běží proti lokálnímu `wrangler dev`. Změna Workeru v D7 se nasadí až po potvrzení uživatele.
+
+| | Obsah | Kritérium přijetí |
+|---|---|---|
+| **D0** Vyčlenění jádra | `ancord-core` z `ancord-node` (13.4), `Store` rozhraní, `OnlineSession` do jádra. Beze změny chování. | `cargo clippy` a `cargo test` v `node/` bez varování, shodný výsledek jako před změnou (vektory, `dataplane.rs`, `e2e.rs`). `cargo check -p ancord-core --target aarch64-linux-android` projde. |
+| **D1** Kostra | `client/`: Tauri 2 + Svelte + TS, CSP, capabilities, IPC kontrakt s generovanými typy, vytvoření identity a zobrazení adresy a QR. | Aplikace se spustí na desktopu. Test: `fetch` z WebView selže, žádný příkaz mimo kontrakt. Změřen instalátor, bundle a start (13.11). |
+| **D2** Úložiště a klíče | Šifrované redb, `master_key` v keychainu platformy, režim s heslem, zámek. | Test: poškozený nebo cizí záznam se neotevře, restart zachová identitu a konverzace, `grep` na čitelný text zprávy v souboru profilu nic nenajde. |
+| **D3** Online klient | Napojení `OnlineSession`: přidání kontaktu podle adresy, příjem obálky, zprávy živě, offline fronta, typing, stav doručení. | E2E test: dva klienti přes lokální Worker a 3 nody si píší živě, offline příjemce zprávu dostane po připojení, duplicitní doručení se zahodí. |
+| **D4** UI | Seznam konverzací, konverzace s virtuálním seznamem, kontakty, ověření bezpečnostním číslem, nastavení, světlé/tmavé téma. | Test UI (mock IPC) pro všechny obrazovky. Změřené otevření konverzace s 10 000 zprávami do cíle z 13.11. |
+| **D5** Desktop hardening | `set_content_protected`, single-instance, tray a autostart (volitelné), zákaz sítě z WebView, kontrola závislostí a odchozího provozu (13.9). | Test odchozích spojení: klient mluví jen s Workerem a nody. `cargo tree`/`npm ls` bez analytiky. Packaging pro Windows, macOS, Linux. |
+| **D6** Android | Prototyp `sync_once` bez Activity (13.10), Kotlin plugin: `FLAG_SECURE`, přístupnost a overlay, Keystore, IME a autofill, oznámení, skener QR, kontrola WebView. | Na emulátoru nebo zařízení: screenshot černý, náhled v přehledu aplikací prázdný, zprávy se posílají a přijímají, QR kontakt funguje. |
+| **D7** Push `up` | Spec §10 (`platform: up`), vektory, Worker (sender, SSRF guard, limit per hostitel, testy), UnifiedPush receiver, volitelné trvalé spojení. | Test: wake od skutečného anchora dorazí na falešný `up` endpoint, endpoint s IP literálem nebo `http` se odmítne, limit per hostitel drží. Na zařízení: offline příjemce dostane generické oznámení a po otevření zprávy. |
+| **D8** Vydání | Podepsané balíčky, reprodukovatelnost kde to jde, finální měření rozpočtu, `THREAT_MODEL.md` pro klienta, dokumentace. | Rozpočet z 13.11 splněn, nebo rozdíly zapsané v sekci 9 s důvodem. |
+
+### 13.15 Mimo rozsah v1 klienta
+iOS, webový klient, přílohy a obrázky, hovory, skupinové konverzace, záloha a více zařízení (bod 11 v sekci 9), FCM (Worker ho umí, klient ne), proxy/Tor, tokenová ekonomika. Co je ve specifikaci protokolu nedefinované, se v klientovi nevymýšlí.

@@ -185,7 +185,7 @@ async function main() {
   const table = buildTable(spaceSeed, leaves);
   const levels = buildTree(table);
   write("space.json", {
-    description: "Proof of Space (spec §9.2): tabulka, Merkle kořen a otevření",
+    description: "Proof of Space (spec §9.2, 4 odkazy na blok): tabulka, Merkle kořen a otevření",
     seed: b64uEncode(spaceSeed),
     leaves,
     t0: b64uEncode(spaceT0(spaceSeed)),

@@ -66,6 +66,25 @@ export interface Config {
   };
 
   push: { nodeBurst: number; nodeRefillPerS: number; coalesceS: number; regSkewS: number };
+
+  /** Dosažitelnost nodů z ostatních (ARCHITECTURE.md §9 bod 7, PROTOCOL §6.1). */
+  reach: {
+    enabled: boolean;
+    /** Kolik různých nodů musí cíl nahlásit, než ho Worker ověří. */
+    minReporters: number;
+    /** Jak dlouho platí hlášení z heartbeatu. */
+    reportTtlS: number;
+    probeTimeoutMs: number;
+    /** Nejkratší rozestup ověření téhož nodu. */
+    probeIntervalS: number;
+    /** Po kolika neúspěšných ověřeních po sobě se node vyřadí z adresáře. */
+    failuresToExclude: number;
+    /** Jak často se ověřuje vyřazený node. */
+    reprobeS: number;
+    maxProbesPerTick: number;
+    /** Víc než tento podíl živých nodů se nevyřadí: to už spíš nevidí Worker, ne oni. */
+    maxExcludedFraction: number;
+  };
 }
 
 const MiB = 1024 * 1024;
@@ -127,6 +146,18 @@ const base: Config = {
   },
 
   push: { nodeBurst: 60, nodeRefillPerS: 5, coalesceS: 20, regSkewS: 300 },
+
+  reach: {
+    enabled: true,
+    minReporters: 1,
+    reportTtlS: 120,
+    probeTimeoutMs: 5000,
+    probeIntervalS: 30,
+    failuresToExclude: 2,
+    reprobeS: 60,
+    maxProbesPerTick: 5,
+    maxExcludedFraction: 0.34,
+  },
 };
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? (T[K] extends unknown[] ? T[K] : DeepPartial<T[K]>) : T[K] };
@@ -146,14 +177,15 @@ const PROFILES: Record<ProfileName, DeepPartial<Config>> = {
       cpu: { iters: 20_000_000, every: 5_000, segments: 6, maxLanes: 8, intervalS: 900, slackMs: 500, timeoutMs: 120_000 },
       space: {
         ram: { minLeaves: 1 << 16, maxLeaves: 1 << 22, deadlineMs: 150, openIntervalS: 300, commitMaxAgeS: 21_600 },
-        storage: { minLeaves: 1 << 18, maxLeaves: 1 << 26, deadlineMs: 2000, openIntervalS: 900, commitMaxAgeS: 86_400 },
+        storage: { minLeaves: 1 << 18, maxLeaves: 1 << 26, deadlineMs: 1000, openIntervalS: 900, commitMaxAgeS: 86_400 },
         openCount: 16,
-        commitTimeoutMs: 900_000,
+        commitTimeoutMs: 1_800_000,
       },
       bandwidth: { bytes: 8 * MiB, poolSize: 4, intervalS: 1800, timeoutMs: 120_000, tokenTtlS: 300 },
       witness: { enabled: true, bytes: 4 * MiB, intervalS: 1800 },
     },
     push: { nodeBurst: 300, nodeRefillPerS: 20, coalesceS: 30 },
+    reach: { reportTtlS: 300, probeIntervalS: 60, reprobeS: 120 },
   },
   open: {
     profile: "open",
@@ -172,14 +204,15 @@ const PROFILES: Record<ProfileName, DeepPartial<Config>> = {
       cpu: { iters: 20_000_000, every: 5_000, segments: 6, maxLanes: 8, intervalS: 900, slackMs: 500, timeoutMs: 120_000 },
       space: {
         ram: { minLeaves: 1 << 16, maxLeaves: 1 << 22, deadlineMs: 150, openIntervalS: 300, commitMaxAgeS: 21_600 },
-        storage: { minLeaves: 1 << 18, maxLeaves: 1 << 26, deadlineMs: 2000, openIntervalS: 900, commitMaxAgeS: 86_400 },
+        storage: { minLeaves: 1 << 18, maxLeaves: 1 << 26, deadlineMs: 1000, openIntervalS: 900, commitMaxAgeS: 86_400 },
         openCount: 16,
-        commitTimeoutMs: 900_000,
+        commitTimeoutMs: 1_800_000,
       },
       bandwidth: { bytes: 8 * MiB, poolSize: 4, intervalS: 1800, timeoutMs: 120_000, tokenTtlS: 300 },
       witness: { enabled: true, bytes: 4 * MiB, intervalS: 1800 },
     },
     push: { nodeBurst: 300, nodeRefillPerS: 20, coalesceS: 30 },
+    reach: { minReporters: 2, reportTtlS: 300, probeIntervalS: 60, reprobeS: 120 },
   },
 };
 
@@ -220,6 +253,8 @@ function validate(c: Config): void {
       if (l < 2 || (l & (l - 1)) !== 0) throw new Error("config space leaves must be powers of two");
     }
   }
+  if (c.reach.minReporters < 1 || c.reach.failuresToExclude < 1) throw new Error("config reach thresholds must be >= 1");
+  if (c.reach.maxExcludedFraction < 0 || c.reach.maxExcludedFraction >= 1) throw new Error("config reach.maxExcludedFraction must be in [0, 1)");
   const w = c.score.weights;
   if (w.cpu + w.ram + w.storage + w.bandwidth <= 0) throw new Error("config score weights must not all be zero");
 }

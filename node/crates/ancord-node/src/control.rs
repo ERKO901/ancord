@@ -51,6 +51,10 @@ fn heartbeat(state: &NodeState, seq: u64) -> Option<String> {
     if let Some(epoch) = state.epoch() {
         body.insert("epoch", json!(epoch));
     }
+    let unreachable = state.reach.unreachable(unix_now(), state.cfg.reach_min_failures, state.cfg.reach_window_s);
+    if !unreachable.is_empty() {
+        body.insert("unreachable", json!(unreachable));
+    }
     let unsigned = serde_json::to_value(&body).ok()?;
     let sig = state.identity.sign(DOMAIN_HEARTBEAT, &canonical_bytes(&unsigned).ok()?);
     let mut msg = unsigned;
@@ -179,13 +183,11 @@ pub async fn run(state: &Arc<NodeState>, worker: &WorkerClient) -> Outcome {
 }
 
 fn on_directory(state: &NodeState, envelope: &Value) {
-    match verify_directory(&state.worker_key, envelope) {
-        Some(dir) => {
-            let epoch = dir.epoch;
-            if state.set_directory(dir) {
-                tracing::info!(epoch, "directory updated");
-            }
-        }
-        None => tracing::warn!("ignored directory with invalid signature"),
+    if verify_directory(&state.worker_key, envelope).is_none() {
+        tracing::warn!("ignored directory with invalid signature");
+        return;
+    }
+    if let Some(epoch) = state.accept_directory(envelope) {
+        tracing::info!(epoch, "directory updated");
     }
 }

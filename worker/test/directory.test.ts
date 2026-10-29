@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { canonicalBytes } from "../src/canonical";
 import { DOMAIN, verifySig } from "../src/crypto";
 import { b64uDecodeLen } from "../src/encoding";
-import { FAST, alignToEpoch, bringUp, exports, newNode, registryStub, setTimeOffset, setup, sqlOf, tick, withRegistry } from "./support/helpers";
+import { FAST, alignToEpoch, bringUp, configure, exports, newNode, registryStub, setTimeOffset, setup, sqlOf, tick, withRegistry } from "./support/helpers";
 import { KV_DIRECTORY, kvDirectoryKey } from "../src/registry/snapshot";
 import { BASE, TestNode } from "./support/node";
 
@@ -255,6 +255,86 @@ describe("adresář a epochy (A2)", () => {
     await tick();
     const d = (await exports.default.fetch(`${BASE}/directory`).then((r) => r.json())) as any;
     expect(d.body.nodes).toHaveLength(0);
+  });
+});
+
+describe("Dosažitelnost nodů (spec §6.1, bod 7)", () => {
+  const reachCfg = { minReporters: 1, probeIntervalS: 0, reprobeS: 0, failuresToExclude: 2 };
+
+  // přímo z Registry: KV v testech může mezi testy ve stejné epoše vrátit adresář předchozího testu
+  async function directoryIds(): Promise<string[]> {
+    const d = (await registryStub().getDirectory()) as any;
+    return d.value.body.nodes.map((x: any) => x.id);
+  }
+
+  it("nahlášený node, který Worker sám nedosáhne, vypadne z dalšího adresáře a po zotavení se vrátí", async () => {
+    await configure({ reach: reachCfg });
+    const epoch = await alignToEpoch(EPOCH_S, 2);
+    const [a, b, c] = [await up(), await up(), await up()];
+    for (const n of [a, b, c]) await n.heartbeat(undefined, epoch);
+    c.reachable = false;
+
+    expect((await a.heartbeat(undefined, undefined, { unreachable: [c.nodeId] })).t).toBe("ack");
+    await tick(); // první neúspěšné ověření
+    await tick(); // druhé: vyřazen
+    // v téže epoše se adresář nemění
+    expect(await directoryIds()).toHaveLength(3);
+
+    await setTimeOffset(testOffset(epoch + 1, 3));
+    for (const n of [a, b, c]) await n.heartbeat(undefined, epoch + 1);
+    await tick();
+    expect(await directoryIds()).toEqual([a.nodeId, b.nodeId].sort());
+    // ani routing ho nenabídne
+    const route = (await exports.default.fetch(`${BASE}/route?ek=${"A".repeat(43)}`).then((r) => r.json())) as any;
+    expect((route.nodes ?? []).map((x: any) => x.node_id)).not.toContain(c.nodeId);
+
+    c.reachable = true;
+    await tick(); // ověření vyřazeného nodu projde
+    await setTimeOffset(testOffset(epoch + 2, 3));
+    for (const n of [a, b, c]) await n.heartbeat(undefined, epoch + 2);
+    await tick();
+    expect(await directoryIds()).toHaveLength(3);
+  });
+
+  it("hlášení dosažitelného nodu nic nezmění a zahodí se", async () => {
+    await configure({ reach: reachCfg });
+    const epoch = await alignToEpoch(EPOCH_S, 2);
+    const [a, b] = [await up(), await up()];
+    await a.heartbeat(undefined, undefined, { unreachable: [b.nodeId, "unknown-node"] });
+    await tick();
+    await tick();
+    const reports = await withRegistry((r) => sqlOf(r).exec("SELECT COUNT(*) AS c FROM reach_reports").one().c);
+    expect(reports).toBe(0);
+    await setTimeOffset(testOffset(epoch + 1, 3));
+    for (const n of [a, b]) await n.heartbeat(undefined, epoch + 1);
+    await tick();
+    expect(await directoryIds()).toHaveLength(2);
+  });
+
+  it("nevyřadí víc než maxExcludedFraction živých nodů (spíš nevidí Worker)", async () => {
+    await configure({ reach: reachCfg });
+    const epoch = await alignToEpoch(EPOCH_S, 2);
+    const nodes = [await up(), await up(), await up()];
+    for (const n of nodes) {
+      await n.heartbeat();
+      n.reachable = false;
+    }
+    await nodes[0]!.heartbeat(undefined, undefined, { unreachable: [nodes[1]!.nodeId, nodes[2]!.nodeId] });
+    await nodes[1]!.heartbeat(undefined, undefined, { unreachable: [nodes[0]!.nodeId] });
+    for (let k = 0; k < 4; k++) await tick();
+    await setTimeOffset(testOffset(epoch + 1, 3));
+    for (const n of nodes) await n.heartbeat(undefined, epoch + 1);
+    await tick();
+    // 3 živé × 0,34 → nejvýš jeden vyřazený
+    expect(await directoryIds()).toHaveLength(2);
+  });
+
+  it("odmítne heartbeat s chybným polem unreachable", async () => {
+    const a = await up();
+    const bad = await a.heartbeat(undefined, undefined, { unreachable: "x" });
+    expect(bad.t).toBe("error");
+    const tooMany = await a.heartbeat(undefined, undefined, { unreachable: Array.from({ length: 17 }, (_, i) => `n${i}`) });
+    expect(tooMany.t).toBe("error");
   });
 });
 

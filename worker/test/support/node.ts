@@ -55,6 +55,8 @@ export class TestNode {
   tables = new Map<string, { seed: Uint8Array; table: Uint8Array; levels: Uint8Array[][]; leaves: number }>();
   challengesSeen: string[] = [];
   autoRespond = true;
+  /** Odpovídá `GET /health` přes simulovaný tunel (ověření dosažitelnosti, spec §6.1). */
+  reachable = true;
 
   private constructor(
     readonly seed: Uint8Array,

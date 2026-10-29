@@ -82,6 +82,8 @@ Jediný povinný vstup je `WORKER_URL`. Ostatní má výchozí hodnotu nebo se z
 | `MESSAGE_TTL_S` | 2 592 000 (30 dní) | jak dlouho se drží nedoručená zpráva |
 | `MAX_MAILBOX_MESSAGES` | 10 000 | strop nedoručených zpráv v mailboxu na nodu |
 | `CLIENT_MSG_RATE` | 20 | zpráv za sekundu na spojení klienta (dávka dvojnásobek) |
+| `REACH_MIN_FAILURES` | 3 | po kolika neúspěšných voláních po sobě se peer hlásí Workeru jako nedosažitelný (spec §6.1) |
+| `REACH_WINDOW_S` | 120 | jak dlouho od posledního neúspěchu se peer hlásí |
 | `MAINTENANCE_INTERVAL_S` | 30 | jak často se kontroluje, zda je třeba handoff |
 | `JANITOR_INTERVAL_S` | 3600 | jak často se uklízí vypršené zprávy |
 | `PRESENCE_TTL_S` | 60 | platnost presence na anchoru bez obnovení |

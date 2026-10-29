@@ -93,6 +93,9 @@ pub enum CliError {
     AllFailed(String),
     #[error("node refused the request ({code}): {reason}")]
     Node { code: String, reason: String },
+    /// Střežená schránka chce razítko s touto obtížností (spec §15.13).
+    #[error("inbox requires a proof-of-work stamp of {0} bits")]
+    PowRequired(u8),
     #[error("connection: {0}")]
     Connection(String),
     #[error("session file: {0}")]
@@ -263,6 +266,10 @@ pub async fn rpc(ws: &mut NodeSocket, mut request: Value) -> Result<Value, CliEr
     };
     ws.queued.extend(queued);
     if reply["t"] == "error" {
+        if reply["code"] == "pow_required" {
+            let bits = reply["bits"].as_u64().and_then(|b| u8::try_from(b).ok()).unwrap_or(ancord_node::guard::MAX_BITS);
+            return Err(CliError::PowRequired(bits));
+        }
         return Err(CliError::Node {
             code: reply["code"].as_str().unwrap_or("error").to_owned(),
             reason: reply["reason"].as_str().unwrap_or("").to_owned(),
@@ -285,6 +292,11 @@ pub enum Role {
     Responder,
 }
 
+/// Za jak dlouho po přijaté zprávě, na kterou klient nic nenapsal, pošle prázdnou zprávu (keepalive, spec §13.2).
+pub const KEEPALIVE_DELAY_S: u64 = 30;
+/// Nejvýše jeden keepalive za tuto dobu v jedné konverzaci.
+pub const KEEPALIVE_MIN_INTERVAL_S: u64 = 3600;
+
 /// Stav konverzace jedné dvojice: sdílené tajemství a Double Ratchet. Ukládá se do souboru.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
@@ -297,6 +309,11 @@ pub struct Session {
     /// Lokální historie konverzace (spec §15.7): server ji nedrží.
     #[serde(default)]
     pub history: Vec<HistoryEntry>,
+    /// Od kdy čeká přijatá zpráva s DH krokem na odpověď (0 = nečeká); po `KEEPALIVE_DELAY_S` jde keepalive.
+    #[serde(default)]
+    unanswered_since: u64,
+    #[serde(default)]
+    last_keepalive: u64,
 }
 
 /// Jedna zpráva v lokální historii.
@@ -335,7 +352,7 @@ impl Session {
     /// Konverzace jen ze sdíleného tajemství (bez prekeys): první ratchet klíč responderu se z něj odvodí (spec §13.2).
     pub fn new(secret: [u8; 32], role: Role) -> Result<Self, CliError> {
         let ratchet = Ratchet::from_shared_secret(&secret, role == Role::Initiator).map_err(|e| CliError::Session(e.to_string()))?;
-        Ok(Self { secret, role, peer: None, ratchet, history: Vec::new() })
+        Ok(Self { secret, role, peer: None, ratchet, history: Vec::new(), unanswered_since: 0, last_keepalive: 0 })
     }
 
     /// Konverzace ze sdíleného tajemství, které vzešlo z dohody mezi uživateli (spec §15.4).
@@ -345,7 +362,36 @@ impl Session {
             FirstRatchetKey::Own(spk_secret) => (Role::Responder, Ok(Ratchet::responder(&pair.secret, &StaticSecret::from(*spk_secret)))),
         };
         let ratchet = ratchet.map_err(|e| CliError::Session(e.to_string()))?;
-        Ok(Self { secret: pair.secret, role, peer: None, ratchet, history: Vec::new() })
+        Ok(Self { secret: pair.secret, role, peer: None, ratchet, history: Vec::new(), unanswered_since: 0, last_keepalive: 0 })
+    }
+
+    /// Přijatá a dešifrovaná zpráva. Prázdný plaintext je keepalive (spec §13.2): do historie se nezapisuje a vrací se
+    /// `false`. Keepalive vyvolá jen skutečná zpráva, jinak by si ho dvě strany posílaly donekonečna.
+    pub(crate) fn accept(&mut self, id: &[u8; 16], plaintext: &[u8]) -> bool {
+        if plaintext.is_empty() {
+            return false;
+        }
+        if self.ratchet.needs_keepalive() && self.unanswered_since == 0 {
+            self.unanswered_since = now_s();
+        }
+        self.record(false, id, plaintext);
+        true
+    }
+
+    /// Má klient poslat keepalive? `delay` je doba od přijaté zprávy, po kterou čeká na skutečnou odpověď uživatele.
+    pub fn keepalive_due(&self, now: u64, delay: u64) -> bool {
+        self.ratchet.needs_keepalive()
+            && self.unanswered_since > 0
+            && now >= self.unanswered_since.saturating_add(delay)
+            && now >= self.last_keepalive.saturating_add(KEEPALIVE_MIN_INTERVAL_S)
+    }
+
+    /// Prázdná zpráva, která protistraně předá nový ratchet klíč (spec §13.2). Odesílá se bez `push_id`: kvůli ní
+    /// příjemce budit nemá smysl. Stav je nutné uložit před odesláním.
+    pub fn prepare_keepalive(&mut self) -> Result<Prepared, CliError> {
+        let p = self.seal(b"")?;
+        self.last_keepalive = now_s();
+        Ok(p)
     }
 
     fn record(&mut self, outgoing: bool, id: &[u8; 16], plaintext: &[u8]) {
@@ -377,10 +423,20 @@ impl Session {
     /// Zašifruje zprávu a posune řetěz. Stav je nutné uložit dřív, než se zpráva odešle, jinak by se po pádu
     /// stejné číslo zprávy použilo podruhé s jiným obsahem.
     pub fn prepare(&mut self, plaintext: &[u8]) -> Result<Prepared, CliError> {
+        // prázdný plaintext je vyhrazený pro keepalive
+        if plaintext.is_empty() {
+            return Err(CliError::Session("empty message".into()));
+        }
+        let p = self.seal(plaintext)?;
+        self.record(true, &p.id, plaintext);
+        Ok(p)
+    }
+
+    fn seal(&mut self, plaintext: &[u8]) -> Result<Prepared, CliError> {
         let mut id = [0u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut id);
         let ct = self.ratchet.seal(&id, plaintext).map_err(|e| CliError::Session(e.to_string()))?;
-        self.record(true, &id, plaintext);
+        self.unanswered_since = 0;
         Ok(Prepared { id, mailbox_id: self.ratchet.send_mailbox_id(), ct, push_id: self.outbox_push_id() })
     }
 
@@ -402,6 +458,22 @@ impl Session {
     pub fn outbox(&self) -> [u8; 32] {
         self.ratchet.send_mailbox_id()
     }
+}
+
+/// Pošle keepalive, je-li čas (`Session::keepalive_due`). Vrací `true`, když odešel. `save` uloží stav před odesláním.
+pub async fn keepalive_if_due(
+    ws: &mut NodeSocket,
+    session: &mut Session,
+    delay: u64,
+    save: impl FnOnce(&Session) -> Result<(), CliError>,
+) -> Result<bool, CliError> {
+    if !session.keepalive_due(now_s(), delay) {
+        return Ok(false);
+    }
+    let prepared = session.prepare_keepalive()?;
+    save(session)?;
+    transmit_with_push(ws, &prepared, None).await?;
+    Ok(true)
 }
 
 /// Odešle připravenou zprávu. Vrací počet anchorů, které ji potvrdily. Není-li příjemce online, anchory ho vzbudí
@@ -438,11 +510,9 @@ pub async fn receive(ws: &mut NodeSocket, session: &mut Session) -> Result<Recei
             _ => out.rejected += 1,
         }
     }
-    // pořadí určuje `seq` z hlavičky ratchetu, ne `ts` (sekundová přesnost)
+    // pořadí určuje `seq` z hlavičky ratchetu, ne `ts` (sekundová přesnost); keepalive se nezobrazuje
     opened.sort_by_key(|(n, _, _)| *n);
-    for (_, id, plain) in &opened {
-        session.record(false, id, plain);
-    }
+    opened.retain(|(_, id, plain)| session.accept(id, plain));
     out.messages = opened.into_iter().map(|(_, _, plain)| plain).collect();
     if !delivered.is_empty() {
         rpc(ws, json!({"t": "ack", "mailbox_id": b64u_encode(&mailbox), "ids": delivered})).await?;
@@ -481,8 +551,9 @@ pub async fn next_event(ws: &mut NodeSocket, session: &mut Session, wait: Durati
                 let Some((id, ct)) = push["id"].as_str().and_then(b64u_decode_array::<16>).zip(push["ct"].as_str()) else { continue };
                 if let Ok(plain) = session.ratchet.open(&id, ct) {
                     rpc(ws, json!({"t": "ack", "mailbox_id": b64u_encode(&session.inbox()), "ids": [b64u_encode(&id)]})).await?;
-                    session.record(false, &id, &plain);
-                    return Ok(Some(Event::Message(plain)));
+                    if session.accept(&id, &plain) {
+                        return Ok(Some(Event::Message(plain)));
+                    }
                 }
             }
             _ => {}
@@ -609,6 +680,23 @@ pub async fn publish_profile(ws: &mut NodeSocket, keys: &UserKeys, pow_bits: u32
     Ok(rpc(ws, request).await?.get("acks").and_then(Value::as_u64).unwrap_or(0))
 }
 
+/// Obtížnost razítka, kterou klient chce pro svou schránku (spec §15.13). Odesílatel ji zaplatí jednou za konverzaci.
+pub const INBOX_POW_BITS: u8 = 20;
+
+/// Zapne stráž schránky na jejích anchorech (spec §15.13): zápis bez razítka s `bits` pak anchory odmítnou.
+pub async fn publish_guard(ws: &mut NodeSocket, keys: &UserKeys, bits: u8) -> Result<u64, CliError> {
+    let mut request = keys.inbox_guard(bits, now_s()).to_json();
+    request["t"] = json!("inbox_guard");
+    Ok(rpc(ws, request).await?.get("acks").and_then(Value::as_u64).unwrap_or(0))
+}
+
+/// `ct` do schránky: razítko s obtížností `bits` a obálka (spec §15.13). Výpočet neblokuje reaktor.
+async fn stamped(mailbox_id: [u8; 32], id: [u8; 16], envelope: Vec<u8>, bits: u8) -> Result<Vec<u8>, CliError> {
+    tokio::task::spawn_blocking(move || ancord_node::guard::stamp(&mailbox_id, &id, &envelope, bits))
+        .await
+        .map_err(|e| CliError::Connection(e.to_string()))
+}
+
 /// Najde profil podle adresy a ověří podpis i to, že patří právě této adrese.
 pub async fn lookup_profile(ws: &mut NodeSocket, pk: &[u8; 32]) -> Result<Profile, CliError> {
     let reply = rpc(ws, json!({"t": "profile_get", "pk": b64u_encode(pk)})).await?;
@@ -644,12 +732,22 @@ pub async fn start_conversation(ws: &mut NodeSocket, keys: &UserKeys, peer: &[u8
     let initiation = keys.initiate(&profile, now_s()).map_err(|e| CliError::Session(e.to_string()))?;
     let mut id = [0u8; 16];
     rand::rngs::OsRng.fill_bytes(&mut id);
-    // `push_id` schránky z profilu: offline příjemce se o nové konverzaci dozví pushem (spec §15.11)
-    let request = json!({
-        "t": "send", "id": b64u_encode(&id), "mailbox_id": b64u_encode(&inbox_id(peer)), "ts": now_s(),
-        "ct": b64u_encode(&initiation.envelope), "push_id": profile.push_id,
-    });
-    rpc(ws, request).await?;
+    let inbox = inbox_id(peer);
+    // obtížnost razítka klient předem nezná: nestřežená schránka vezme nulové, jinak ji anchory řeknou (spec §15.13)
+    let mut bits = 0;
+    loop {
+        let ct = stamped(inbox, id, initiation.envelope.clone(), bits).await?;
+        // `push_id` schránky z profilu: offline příjemce se o nové konverzaci dozví pushem (spec §15.11)
+        let request = json!({
+            "t": "send", "id": b64u_encode(&id), "mailbox_id": b64u_encode(&inbox), "ts": now_s(),
+            "ct": b64u_encode(&ct), "push_id": profile.push_id,
+        });
+        match rpc(ws, request).await {
+            Ok(_) => break,
+            Err(CliError::PowRequired(want)) if want > bits && want <= ancord_node::guard::MAX_BITS => bits = want,
+            Err(e) => return Err(e),
+        }
+    }
     let mut session = Session::from_pairwise(&initiation.pairwise)?;
     session.peer = Some(b64u_encode(peer));
     Ok(session)
@@ -679,8 +777,10 @@ pub async fn process_inbox(ws: &mut NodeSocket, keys: &mut UserKeys) -> Result<I
     let mut batch = InboxBatch::default();
     let mut seen = std::collections::HashSet::new();
     for m in reply["messages"].as_array().map_or(&[][..], Vec::as_slice) {
-        let (Some(id), Some(env)) = (m["id"].as_str(), m["ct"].as_str().and_then(ancord_node::encoding::b64u_decode)) else { continue };
-        let opened: Opened = match keys.open_envelope(&env) {
+        let (Some(id), Some(ct)) = (m["id"].as_str(), m["ct"].as_str().and_then(ancord_node::encoding::b64u_decode)) else { continue };
+        // razítko (spec §15.13) ověřily anchory, klientovi stačí obálka za ním
+        let env = ancord_node::guard::strip_stamp(&ct).unwrap_or_default();
+        let opened: Opened = match keys.open_envelope(env) {
             Ok(o) => o,
             // cizí, poškozené nebo zastaralé: nikdy nebude platné, uvolní se místo ve schránce
             Err(_) => {
@@ -717,4 +817,42 @@ pub async fn ack_inbox(ws: &mut NodeSocket, keys: &UserKeys, done: &[String]) ->
 /// Bezpečnostní číslo s protistranou k porovnání mimo síť (spec §15.2).
 pub fn safety(keys: &UserKeys, peer: &[u8; 32]) -> String {
     ancord_node::user::safety_number(&keys.pk(), peer)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    fn pair() -> (Session, Session) {
+        (Session::new([5; 32], Role::Initiator).unwrap(), Session::new([5; 32], Role::Responder).unwrap())
+    }
+
+    fn deliver(from: &mut Session, to: &mut Session, text: &[u8]) -> bool {
+        let p = if text.is_empty() { from.prepare_keepalive().unwrap() } else { from.prepare(text).unwrap() };
+        let plain = to.ratchet.open(&p.id, &p.ct).unwrap();
+        to.accept(&p.id, &plain)
+    }
+
+    #[test]
+    fn keepalive_after_real_message_only_and_not_shown() {
+        let (mut a, mut b) = pair();
+        assert!(a.prepare(b"").is_err(), "empty plaintext is reserved for keepalive");
+        assert!(deliver(&mut a, &mut b, b"ahoj"));
+        let now = now_s();
+        assert!(!b.keepalive_due(now, KEEPALIVE_DELAY_S), "waits for a real reply first");
+        assert!(b.keepalive_due(now + KEEPALIVE_DELAY_S, KEEPALIVE_DELAY_S));
+        // keepalive dorazí, do historie se nezapíše a sám další keepalive nevyvolá
+        assert!(!deliver(&mut b, &mut a, b""));
+        assert_eq!(a.history.len(), 1);
+        assert!(!a.keepalive_due(now + 10 * KEEPALIVE_MIN_INTERVAL_S, 0));
+        assert!(!b.keepalive_due(now + 10 * KEEPALIVE_MIN_INTERVAL_S, 0));
+        // další zpráva Alice jde novým řetězem; Bob smí poslat další keepalive až po minimálním intervalu
+        assert!(deliver(&mut a, &mut b, "druhá".as_bytes()));
+        assert!(!b.keepalive_due(now + KEEPALIVE_DELAY_S, KEEPALIVE_DELAY_S));
+        assert!(b.keepalive_due(now + KEEPALIVE_MIN_INTERVAL_S + KEEPALIVE_DELAY_S, KEEPALIVE_DELAY_S));
+        // skutečná odpověď keepalive zruší
+        assert!(deliver(&mut b, &mut a, "odpověď".as_bytes()));
+        assert!(!b.keepalive_due(now + 10 * KEEPALIVE_MIN_INTERVAL_S, 0));
+    }
 }

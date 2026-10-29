@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use ancord_cli::online::{Online, OnlineEvent, Persist};
 use ancord_cli::{
-    ack_inbox, address, connect_any, create_user, default_url, fetch_route, load_user, lock_file, lookup_profile, message_status, next_event, parse_address,
+    ack_inbox, address, connect_any, keepalive_if_due, KEEPALIVE_DELAY_S, create_user, default_url, fetch_route, load_user, lock_file, lookup_profile, message_status, next_event, parse_address,
     process_inbox, publish_profile, receive, register_push, safety, save_user, send_typing, start_conversation, subscribe, transmit, write_private, CliError,
     Event, NodeSocket, Role, Route, RouteNode, Session,
 };
@@ -360,6 +360,7 @@ async fn online_session<R: tokio::io::AsyncBufRead + Unpin>(
             // konec vstupu (např. běh na pozadí): dál jen přijímat
             Step::Line(_) => *stdin = None,
         }
+        online.keepalives(ws, &mut ctx.store).await?;
     }
 }
 
@@ -511,6 +512,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             let (_, mut ws) = open(&cli, &ek, &route).await?;
             let acks = publish_profile(&mut ws, &keys, *pow_bits).await?;
+            ancord_cli::publish_guard(&mut ws, &keys, ancord_cli::INBOX_POW_BITS).await?;
             println!("profile stored on {acks} anchors");
             ws.close().await;
         }
@@ -605,6 +607,8 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             if received.rejected > 0 {
                 eprintln!("{} message(s) could not be decrypted", received.rejected);
             }
+            // jednorázový příkaz nečeká na odpověď uživatele: nový ratchet klíč předá hned (spec §13.2)
+            keepalive_if_due(&mut ws, &mut session, 0, |s| s.save(file)).await?;
             ws.close().await;
         }
         Cmd::Watch { file } => {
@@ -628,7 +632,10 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 match pushed? {
                     Some(Event::Message(m)) => println!("{}", String::from_utf8_lossy(&m)),
                     Some(Event::Typing(on)) => eprintln!("{}", if on { "(typing…)" } else { "(stopped typing)" }),
-                    None => ws.send_json(&serde_json::json!({"t": "ping"})).await?,
+                    None => {
+                        ws.send_json(&serde_json::json!({"t": "ping"})).await?;
+                        keepalive_if_due(&mut ws, &mut session, KEEPALIVE_DELAY_S, |s| s.save(file)).await?;
+                    }
                 }
             }
             ws.close().await;

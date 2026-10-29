@@ -16,6 +16,8 @@ const D0: &[u8] = b"ancord/space/0";
 const DI: &[u8] = b"ancord/space/i";
 const CHUNK: usize = 1 << 16;
 const PAIR: usize = 2 * LEAF_BYTES;
+/// Počet odkazů na dřívější bloky (`spec/PROTOCOL.md` §9.2).
+pub const REFS: usize = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SpaceError {
@@ -31,15 +33,12 @@ fn t0(seed: &[u8; 32]) -> [u8; 32] {
     Sha256::new().chain_update(D0).chain_update(seed).finalize().into()
 }
 
-fn ti(seed: &[u8; 32], i: u64, prev: &[u8], reference: &[u8]) -> [u8; 32] {
-    Sha256::new()
-        .chain_update(DI)
-        .chain_update(seed)
-        .chain_update(i.to_le_bytes())
-        .chain_update(prev)
-        .chain_update(reference)
-        .finalize()
-        .into()
+fn ti(seed: &[u8; 32], i: u64, prev: &[u8], refs: &[[u8; LEAF_BYTES]; REFS]) -> [u8; 32] {
+    let mut h = Sha256::new().chain_update(DI).chain_update(seed).chain_update(i.to_le_bytes()).chain_update(prev);
+    for r in refs {
+        h.update(r);
+    }
+    h.finalize().into()
 }
 
 fn leaf_hash(t: &[u8]) -> [u8; 32] {
@@ -50,11 +49,13 @@ fn node_hash(l: &[u8], r: &[u8]) -> [u8; 32] {
     Sha256::new().chain_update([1u8]).chain_update(l).chain_update(r).finalize().into()
 }
 
-/// `j(i) = u64_le(T[i−1][0..8]) mod i`.
-fn ref_index(prev: &[u8], i: u64) -> u64 {
-    let mut b = [0u8; 8];
-    b.copy_from_slice(&prev[..8]);
-    u64::from_le_bytes(b) % i
+/// `j_m(i) = u64_le(T[i−1][8m..8m+8]) mod i` pro `m ∈ [0, REFS)`.
+fn ref_indices(prev: &[u8], i: u64) -> [u64; REFS] {
+    std::array::from_fn(|m| {
+        let mut b = [0u8; 8];
+        b.copy_from_slice(&prev[8 * m..8 * m + 8]);
+        u64::from_le_bytes(b) % i
+    })
 }
 
 /// Úložiště bajtů s náhodným přístupem.
@@ -136,21 +137,23 @@ impl SpaceTable {
         let mut table = Backing::create((n * LEAF_BYTES) as u64, table_path.as_deref())?;
         let mut tree = Backing::create((tree_nodes * LEAF_BYTES) as u64, tree_path.as_deref())?;
 
-        // T[i] závisí na T[i−1] a T[j(i)]; zápisy se dávkují, odkaz do nezapsané dávky se čte z ní
+        // T[i] závisí na T[i−1] a T[j_m(i)]; zápisy se dávkují, odkaz do nezapsané dávky se čte z ní
         let mut pending: Vec<u8> = Vec::with_capacity(CHUNK);
         let mut flushed: usize = 0;
         let mut prev = t0(&seed);
         pending.extend_from_slice(&prev);
+        let mut refs = [[0u8; LEAF_BYTES]; REFS];
         for i in 1..n {
-            let j = ref_index(&prev, i as u64) as usize;
-            let mut reference = [0u8; LEAF_BYTES];
-            if j >= flushed {
-                let o = (j - flushed) * LEAF_BYTES;
-                reference.copy_from_slice(&pending[o..o + LEAF_BYTES]);
-            } else {
-                table.read_at((j * LEAF_BYTES) as u64, &mut reference)?;
+            for (r, j) in refs.iter_mut().zip(ref_indices(&prev, i as u64)) {
+                let j = j as usize;
+                if j >= flushed {
+                    let o = (j - flushed) * LEAF_BYTES;
+                    r.copy_from_slice(&pending[o..o + LEAF_BYTES]);
+                } else {
+                    table.read_at((j * LEAF_BYTES) as u64, r)?;
+                }
             }
-            prev = ti(&seed, i as u64, &prev, &reference);
+            prev = ti(&seed, i as u64, &prev, &refs);
             pending.extend_from_slice(&prev);
             if pending.len() >= CHUNK {
                 table.write_at((flushed * LEAF_BYTES) as u64, &pending)?;
@@ -228,22 +231,27 @@ impl SpaceTable {
         Ok(out)
     }
 
-    /// Otevření indexu `i` (≥ 1): list, předchozí list a odkazovaný list s cestami.
+    /// Otevření indexu `i` (≥ 1): list, předchozí list a odkazované listy s cestami.
     pub fn opening(&self, i: u64) -> Result<serde_json::Value, SpaceError> {
         if i == 0 || i >= self.leaves as u64 {
             return Err(SpaceError::BadIndex(i));
         }
         let iu = i as usize;
         let prev = self.leaf(iu - 1)?;
-        let j = ref_index(&prev, i) as usize;
+        let mut refs = Vec::with_capacity(REFS);
+        let mut ref_paths = Vec::with_capacity(REFS);
+        for j in ref_indices(&prev, i) {
+            refs.push(b64u_encode(&self.leaf(j as usize)?));
+            ref_paths.push(self.path(j as usize)?);
+        }
         Ok(serde_json::json!({
             "i": i,
             "leaf": b64u_encode(&self.leaf(iu)?),
             "path": self.path(iu)?,
             "prev": b64u_encode(&prev),
             "prev_path": self.path(iu - 1)?,
-            "ref": b64u_encode(&self.leaf(j)?),
-            "ref_path": self.path(j)?,
+            "refs": refs,
+            "ref_paths": ref_paths,
         }))
     }
 }

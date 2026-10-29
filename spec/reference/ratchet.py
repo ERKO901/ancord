@@ -25,8 +25,17 @@ def dh(priv, pub): return priv.exchange(X25519PublicKey.from_public_bytes(pub))
 
 def mailbox_id(ss, d): return sha(b"ancord/v1/mailbox\0", ss, b"\0", d.encode())
 def kdf_rk(rk, d):
-    okm = hkdf(rk, d, b"ancord/v1/ratchet/root", 64)
-    return okm[:32], okm[32:]
+    okm = hkdf(rk, d, b"ancord/v1/ratchet/root", 96)
+    return okm[:32], okm[32:64], okm[64:]
+def header_key0(ss, d): return hkdf(b"ancord/v1/ratchet", ss, b"header/" + d.encode(), 32)
+def header_nonce(mid): return sha(b"ancord/v1/hdr\0", mid)[:12]
+def header_aad(mbox, mid): return b"ancord/v1/hdr\0" + mbox + mid
+def open_header(hk, mbox, mid, enc):
+    try:
+        h = ChaCha20Poly1305(hk).decrypt(header_nonce(mid), enc, header_aad(mbox, mid))
+    except Exception:
+        return None
+    return h[:32], struct.unpack(">III", h[32:])
 def msg_key(ck):
     mk = hkdf(None, ck, b"ancord/v1/ratchet/msg", 44)
     return mk[:32], mk[32:]
@@ -45,48 +54,63 @@ class Party:
         self.dhr = self.cks = self.ckr = None
         self.ns = self.nr = self.pn = self.seq = 0
         self.skipped = {}
+        self.hks = self.hkr = None
+        self.nhks, self.nhkr = header_key0(ss, self.send_dir), header_key0(ss, self.recv_dir)
         if initiator:
             self.dhs = xkey(self.seeds.pop(0))
             self.dhr = peer_pub
-            self.rk, self.cks = kdf_rk(self.rk, dh(self.dhs, peer_pub))
+            self.hks = self.nhks
+            self.rk, self.cks, self.nhks = kdf_rk(self.rk, dh(self.dhs, peer_pub))
         else:
             self.dhs = own_priv
 
     def seal(self, mid, plaintext):
         key, nonce = msg_key(self.cks)
+        mbox = mailbox_id(self.ss, self.send_dir)
         header = xpub(self.dhs) + struct.pack(">III", self.pn, self.ns, self.seq)
-        aad = b"ancord/v1/msg\0" + mailbox_id(self.ss, self.send_dir) + mid + header
+        enc_header = ChaCha20Poly1305(self.hks).encrypt(header_nonce(mid), header, header_aad(mbox, mid))
+        aad = b"ancord/v1/msg\0" + mbox + mid + enc_header
         body = ChaCha20Poly1305(key).encrypt(nonce, plaintext, aad)
-        out = dict(key_hex=key.hex(), nonce_hex=nonce.hex(), aad_hex=aad.hex(), header_hex=header.hex())
+        out = dict(key_hex=key.hex(), nonce_hex=nonce.hex(), aad_hex=aad.hex(), header_hex=header.hex(),
+                   header_key_hex=self.hks.hex(), header_nonce_hex=header_nonce(mid).hex())
         self.cks, self.ns, self.seq = next_ck(self.cks), self.ns + 1, self.seq + 1
-        return b64u(header + body), out
+        return b64u(enc_header + body), out
 
     def skip(self, until):
         if self.ckr is None:
             return
         assert until - self.nr <= MAX_SKIP
         while self.nr < until:
-            self.skipped[(self.dhr, self.nr)] = msg_key(self.ckr)
+            self.skipped[(self.hkr, self.nr)] = msg_key(self.ckr)
             self.ckr, self.nr = next_ck(self.ckr), self.nr + 1
 
     def open(self, mid, ct):
         wire = unb64u(ct)
-        header, body = wire[:44], wire[44:]
-        dhp, (pn, n, seq) = header[:32], struct.unpack(">III", header[32:])
-        aad = b"ancord/v1/msg\0" + mailbox_id(self.ss, self.recv_dir) + mid + header
-        if (dhp, n) in self.skipped:
-            key, nonce = self.skipped.pop((dhp, n))
-        else:
-            if dhp != self.dhr:
-                self.skip(pn)
-                self.pn, self.ns, self.nr, self.dhr = self.ns, 0, 0, dhp
-                self.rk, self.ckr = kdf_rk(self.rk, dh(self.dhs, self.dhr))
-                self.dhs = xkey(self.seeds.pop(0))
-                self.rk, self.cks = kdf_rk(self.rk, dh(self.dhs, self.dhr))
-            assert n >= self.nr
-            self.skip(n)
-            key, nonce = msg_key(self.ckr)
-            self.ckr, self.nr = next_ck(self.ckr), n + 1
+        enc, body = wire[:60], wire[60:]
+        mbox = mailbox_id(self.ss, self.recv_dir)
+        aad = b"ancord/v1/msg\0" + mbox + mid + enc
+        # 1) klíče hlaviček uložených přeskočených zpráv
+        for hk in {hk for hk, _ in self.skipped}:
+            h = open_header(hk, mbox, mid, enc)
+            if h and (hk, h[1][1]) in self.skipped:
+                key, nonce = self.skipped.pop((hk, h[1][1]))
+                return ChaCha20Poly1305(key).decrypt(nonce, body, aad), h[1][2]
+        # 2) aktuální přijímací řetěz, 3) další řetěz = DH krok
+        h = open_header(self.hkr, mbox, mid, enc) if self.hkr else None
+        if h is None:
+            h = open_header(self.nhkr, mbox, mid, enc)
+            assert h is not None
+            self.skip(h[1][0])
+            self.pn, self.ns, self.nr, self.dhr = self.ns, 0, 0, h[0]
+            self.hks, self.hkr = self.nhks, self.nhkr
+            self.rk, self.ckr, self.nhkr = kdf_rk(self.rk, dh(self.dhs, self.dhr))
+            self.dhs = xkey(self.seeds.pop(0))
+            self.rk, self.cks, self.nhks = kdf_rk(self.rk, dh(self.dhs, self.dhr))
+        _, (pn, n, seq) = h
+        assert n >= self.nr
+        self.skip(n)
+        key, nonce = msg_key(self.ckr)
+        self.ckr, self.nr = next_ck(self.ckr), n + 1
         return ChaCha20Poly1305(key).decrypt(nonce, body, aad), seq
 
 
@@ -143,7 +167,8 @@ shared = scenario(
 )
 
 print(json.dumps({
-    "description": "Double Ratchet (spec §13.2): X25519 + HKDF-SHA256 + ChaCha20-Poly1305, nezávislý Python (spec/reference/ratchet.py)",
+    "description": "Double Ratchet se šifrovanou hlavičkou (spec §13.2): X25519 + HKDF-SHA256 + ChaCha20-Poly1305, nezávislý Python (spec/reference/ratchet.py)",
+    "header_keys": {d: b64u(header_key0(ss, d)) for d in ("i2r", "r2i")},
     "shared_secret": b64u(ss),
     "max_skip": MAX_SKIP,
     "mailboxes": {d: b64u(mailbox_id(ss, d)) for d in ("i2r", "r2i")},

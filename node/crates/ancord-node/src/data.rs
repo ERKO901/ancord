@@ -42,6 +42,9 @@ pub enum DataError {
     NotFound,
     #[error("invalid signature or proof of work")]
     InvalidProof,
+    /// Střežená schránka (§15.13): zápis potřebuje razítko s touto obtížností.
+    #[error("inbox requires a proof-of-work stamp")]
+    PowRequired(u8),
     #[error("storage failure")]
     Storage,
 }
@@ -58,6 +61,7 @@ impl DataError {
             Self::MailboxFull => "mailbox_full",
             Self::NotFound => "not_found",
             Self::InvalidProof => "invalid_proof",
+            Self::PowRequired(_) => "pow_required",
             Self::Storage => "unavailable",
         }
     }
@@ -218,6 +222,13 @@ pub async fn put_local(st: &Arc<NodeState>, mailbox_id: [u8; 32], id: [u8; 16], 
     if exp <= now {
         return Ok(PutOutcome::Duplicate);
     }
+    // střežená schránka: razítko je součástí `ct`, takže platí i při handoffu (§15.13); náhrobek ho nepotřebuje
+    if let Some(ct) = &ct {
+        let bits = crate::guard::required_bits(st, mailbox_id).await?;
+        if bits > 0 && !crate::guard::stamp_valid(&mailbox_id, &id, ct, bits) {
+            return Err(DataError::PowRequired(bits));
+        }
+    }
     let cap = st.cfg.max_mailbox_messages;
     blocking(st, move |s| s.store.put(&mailbox_id, &id, ts, exp, ct.as_deref(), cap)).await
 }
@@ -276,6 +287,8 @@ pub async fn status(st: &Arc<NodeState>, mailbox_id: [u8; 32], ids: Vec<[u8; 16]
 #[derive(Debug)]
 pub(crate) enum OpError {
     Full,
+    /// Anchor chce razítko s touto obtížností (§15.13).
+    PowRequired(u8),
     Failed(String),
 }
 
@@ -291,11 +304,20 @@ pub(crate) async fn peer_post(st: &NodeState, node: &DirectoryNode, path: &str, 
         let (status, answer) = n2n::call(st, node, op, body).await.map_err(OpError::Failed)?;
         if status == 403 && attempt < FORBIDDEN_RETRIES {
             attempt += 1;
+            // příjemce může mít novější adresář, který jsme nedostali (Worker nedostupný, spec §6.1); s ním se mění
+            // anchory, takže opakovat tento požadavek nemá smysl, další už půjde podle nového adresáře
+            if attempt == 1 && crate::reach::pull_directory(st, node).await {
+                return Err(OpError::Failed(format!("{} holds a newer directory", node.id)));
+            }
             tokio::time::sleep(FORBIDDEN_DELAY).await;
             continue;
         }
         if status == 507 {
             return Err(OpError::Full);
+        }
+        if status == 428 {
+            let bits = answer["error"]["bits"].as_u64().and_then(|b| u8::try_from(b).ok()).unwrap_or(crate::guard::MAX_BITS);
+            return Err(OpError::PowRequired(bits));
         }
         if !(200..300).contains(&status) {
             return Err(OpError::Failed(format!("{} answered {status}", node.id)));
@@ -326,6 +348,7 @@ where
 pub(crate) fn local(e: DataError) -> OpError {
     match e {
         DataError::MailboxFull => OpError::Full,
+        DataError::PowRequired(bits) => OpError::PowRequired(bits),
         other => OpError::Failed(other.to_string()),
     }
 }
@@ -357,7 +380,7 @@ pub async fn send_with_push(st: &Arc<NodeState>, mailbox_id: [u8; 32], id: [u8; 
             peer_post(&st, &node, "/n/put", &body).await.map(|_| ())
         }
     });
-    let (mut acks, mut full) = (0, false);
+    let (mut acks, mut full, mut pow) = (0, false, None);
     while let Some(result) = rx.recv().await {
         match result {
             Ok(()) => {
@@ -367,10 +390,15 @@ pub async fn send_with_push(st: &Arc<NodeState>, mailbox_id: [u8; 32], id: [u8; 
                 }
             }
             Err(OpError::Full) => full = true,
+            Err(OpError::PowRequired(bits)) => pow = pow.max(Some(bits)),
             Err(OpError::Failed(reason)) => tracing::debug!(%reason, "anchor write failed"),
         }
     }
-    Err(if full { DataError::MailboxFull } else { DataError::QuorumUnavailable })
+    Err(match (pow, full) {
+        (Some(bits), _) => DataError::PowRequired(bits),
+        (None, true) => DataError::MailboxFull,
+        (None, false) => DataError::QuorumUnavailable,
+    })
 }
 
 /// Nedoručené zprávy mailboxu: sjednocení odpovědí nejméně `r − quorum + 1` anchorů.
@@ -494,5 +522,6 @@ pub async fn handoff(st: &Arc<NodeState>) -> bool {
         }
     }
     all_ok &= crate::profile::handoff(st).await;
+    all_ok &= crate::guard::handoff(st).await;
     all_ok
 }

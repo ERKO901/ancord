@@ -3,6 +3,7 @@ import { DOMAIN } from "../crypto";
 import { b64uEncode } from "../encoding";
 import { all, one, run, type NodeRow } from "./store";
 import type { RegCtx } from "./context";
+import { excludedIds } from "./reach";
 
 export interface DirectoryNode {
   id: string;
@@ -38,8 +39,10 @@ export function readDirectory(ctx: RegCtx, epoch: number): SignedDirectory | nul
   return row ? { body: JSON.parse(row.body) as DirectoryBody, sig: row.sig, kid: row.kid } : null;
 }
 
+/** Aktivní, živé a dosažitelné nody (spec §6, §6.1). */
 export function eligibleForDirectory(ctx: RegCtx, nowS: number): NodeRow[] {
   const { cfg } = ctx;
+  const excluded = excludedIds(ctx);
   return all<NodeRow & Record<string, SqlStorageValue>>(
     ctx.sql,
     `SELECT * FROM nodes
@@ -48,7 +51,7 @@ export function eligibleForDirectory(ctx: RegCtx, nowS: number): NodeRow[] {
       ORDER BY node_id`,
     nowS - cfg.heartbeatTimeoutS,
     cfg.directoryMinChallenges,
-  );
+  ).filter((n) => !excluded.has(n.node_id));
 }
 
 /**

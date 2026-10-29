@@ -312,7 +312,8 @@ export function requireKnownNode(ctx: RegCtx, auth: AuthCtx): NodeRow {
 }
 
 /** Kam Worker pošle žádost o důkaz. `PROOF_ORIGIN` platí jen v mock režimu (lokální vývoj bez tunelu). */
-function proofOrigin(ctx: RegCtx, hostname: string): string {
+/** Origin nodu, jak ho vidí Worker (v mock režimu `PROOF_ORIGIN`, jinak `https://<hostname>`). */
+export function proofOrigin(ctx: RegCtx, hostname: string): string {
   const dev = ctx.env.CLOUDFLARE_MODE === "mock" ? ctx.env.PROOF_ORIGIN : undefined;
   return dev ? dev.replace("{hostname}", hostname).replace(/\/+$/, "") : `https://${hostname}`;
 }

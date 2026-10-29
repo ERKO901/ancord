@@ -180,6 +180,7 @@ pub async fn put(st: &Arc<NodeState>, profile: Profile) -> Result<usize, DataErr
             }
             Err(OpError::Full) => full = true,
             Err(OpError::Failed(reason)) => tracing::debug!(%reason, "profile write failed"),
+            Err(OpError::PowRequired(_)) => {}
         }
     }
     Err(if full { DataError::MailboxFull } else { DataError::QuorumUnavailable })

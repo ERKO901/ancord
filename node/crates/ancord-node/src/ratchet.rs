@@ -16,6 +16,8 @@ pub const MAX_SKIP: u32 = 200;
 const TAG_LEN: usize = 16;
 /// `dh(32) ‖ pn ‖ n ‖ seq`, čísla big-endian u32.
 const HEADER_LEN: usize = 32 + 3 * 4;
+/// Zašifrovaná hlavička (spec §13.2): `H` a tag.
+const ENC_HEADER_LEN: usize = HEADER_LEN + TAG_LEN;
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum RatchetError {
@@ -82,13 +84,49 @@ fn root_key(shared_secret: &[u8; 32]) -> [u8; 32] {
     expand(shared_secret, Some(b"ancord/v1/ratchet"), b"root")
 }
 
-/// Kořenový krok: z kořenového klíče a výstupu DH vznikne nový kořenový klíč a klíč řetězu.
-fn kdf_rk(root_key: &[u8; 32], dh_out: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
-    let okm: [u8; 64] = expand(dh_out, Some(root_key), b"ancord/v1/ratchet/root");
-    let (mut rk, mut ck) = ([0u8; 32], [0u8; 32]);
+/// Kořenový krok: z kořenového klíče a výstupu DH vznikne nový kořenový klíč, klíč řetězu a klíč hlavičky
+/// následujícího řetězu téhož směru.
+fn kdf_rk(root_key: &[u8; 32], dh_out: &[u8; 32]) -> ([u8; 32], [u8; 32], [u8; 32]) {
+    let okm: [u8; 96] = expand(dh_out, Some(root_key), b"ancord/v1/ratchet/root");
+    let (mut rk, mut ck, mut nhk) = ([0u8; 32], [0u8; 32], [0u8; 32]);
     rk.copy_from_slice(&okm[..32]);
-    ck.copy_from_slice(&okm[32..]);
-    (rk, ck)
+    ck.copy_from_slice(&okm[32..64]);
+    nhk.copy_from_slice(&okm[64..]);
+    (rk, ck, nhk)
+}
+
+/// Klíč hlavičky prvního řetězu směru `dir` (spec §13.2).
+fn initial_header_key(shared_secret: &[u8; 32], dir: Direction) -> [u8; 32] {
+    expand(shared_secret, Some(b"ancord/v1/ratchet"), format!("header/{}", dir.as_str()).as_bytes())
+}
+
+/// Nonce hlavičky: `sha256("ancord/v1/hdr" ‖ 0x00 ‖ id)[0..12]`. `id` je náhodné a pro každou zprávu nové.
+fn header_nonce(id: &[u8; 16]) -> [u8; 12] {
+    let h: [u8; 32] = Sha256::new().chain_update(b"ancord/v1/hdr\0").chain_update(id).finalize().into();
+    let mut n = [0u8; 12];
+    n.copy_from_slice(&h[..12]);
+    n
+}
+
+fn header_aad(mailbox_id: &[u8; 32], id: &[u8; 16]) -> Vec<u8> {
+    let mut v = b"ancord/v1/hdr\0".to_vec();
+    v.extend_from_slice(mailbox_id);
+    v.extend_from_slice(id);
+    v
+}
+
+fn seal_header(hk: &[u8; 32], mailbox_id: &[u8; 32], id: &[u8; 16], header: &Header) -> Result<Vec<u8>, RatchetError> {
+    let plain = header.encode();
+    ChaCha20Poly1305::new(Key::from_slice(hk))
+        .encrypt(Nonce::from_slice(&header_nonce(id)), Payload { msg: &plain, aad: &header_aad(mailbox_id, id) })
+        .map_err(|_| RatchetError::Auth)
+}
+
+fn open_header(hk: &[u8; 32], mailbox_id: &[u8; 32], id: &[u8; 16], enc: &[u8]) -> Option<Header> {
+    let plain = ChaCha20Poly1305::new(Key::from_slice(hk))
+        .decrypt(Nonce::from_slice(&header_nonce(id)), Payload { msg: enc, aad: &header_aad(mailbox_id, id) })
+        .ok()?;
+    Header::parse(&plain)
 }
 
 /// První ratchet klíč responderu, když strany nemají prekeys a sdílejí jen tajemství (`spec` §13.2).
@@ -107,6 +145,13 @@ fn dh(secret: &StaticSecret, public: &[u8; 32]) -> Result<[u8; 32], RatchetError
 struct MessageKey {
     key: [u8; 32],
     nonce: [u8; 12],
+}
+
+/// Klíč nalezené zprávy a její `seq` z hlavičky.
+struct Opened {
+    key: [u8; 32],
+    nonce: [u8; 12],
+    seq: u32,
 }
 
 fn message_key(chain_key: &[u8; 32]) -> MessageKey {
@@ -153,10 +198,10 @@ impl Header {
     }
 }
 
-/// Uložený klíč zprávy, která v řetězu `dh` ještě nedorazila.
+/// Uložený klíč zprávy, která v řetězu s klíčem hlavičky `hk` ještě nedorazila.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Skipped {
-    dh: [u8; 32],
+    hk: [u8; 32],
     n: u32,
     key: [u8; 32],
     nonce: [u8; 12],
@@ -173,6 +218,14 @@ pub struct Ratchet {
     dhr: Option<[u8; 32]>,
     cks: Option<[u8; 32]>,
     ckr: Option<[u8; 32]>,
+    /// Klíče hlaviček: odesílacího a přijímacího řetězu a těch, které přijdou po dalším DH kroku.
+    hks: Option<[u8; 32]>,
+    hkr: Option<[u8; 32]>,
+    nhks: [u8; 32],
+    nhkr: [u8; 32],
+    /// Proběhl DH krok, ale v novém odesílacím řetězu ještě nic neodešlo: protistrana nový klíč nezná (§13.2, keepalive).
+    #[serde(default)]
+    unanswered: bool,
     ns: u32,
     nr: u32,
     pn: u32,
@@ -190,6 +243,13 @@ impl Ratchet {
             dhr: None,
             cks: None,
             ckr: None,
+            // první řetězy obou směrů mají klíč hlavičky ze sdíleného tajemství; responder ho pro svůj směr použije
+            // až po DH kroku (`nhks`), iniciátor hned
+            hks: None,
+            hkr: None,
+            nhks: initial_header_key(shared_secret, send),
+            nhkr: initial_header_key(shared_secret, send.opposite()),
+            unanswered: false,
             ns: 0,
             nr: 0,
             pn: 0,
@@ -210,9 +270,11 @@ impl Ratchet {
     ) -> Result<Self, RatchetError> {
         let dhs = StaticSecret::random_from_rng(rng);
         let mut state = Self::new(shared_secret, Direction::InitiatorToResponder, &dhs);
-        let (rk, cks) = kdf_rk(&state.root_key, &dh(&dhs, peer_ratchet_key)?);
+        let (rk, cks, nhks) = kdf_rk(&state.root_key, &dh(&dhs, peer_ratchet_key)?);
         state.root_key = rk;
         state.cks = Some(cks);
+        state.hks = Some(state.nhks);
+        state.nhks = nhks;
         state.dhr = Some(*peer_ratchet_key);
         Ok(state)
     }
@@ -244,20 +306,28 @@ impl Ratchet {
 
     /// Zašifruje zprávu `id` a posune řetěz. Vrací `ct` (b64u) pro pole `ct` zprávy `send`.
     pub fn seal(&mut self, id: &[u8; 16], plaintext: &[u8]) -> Result<String, RatchetError> {
-        let ck = self.cks.ok_or(RatchetError::NoSendChain)?;
+        let (Some(ck), Some(hk)) = (self.cks, self.hks) else { return Err(RatchetError::NoSendChain) };
         let next_ns = self.ns.checked_add(1).ok_or(RatchetError::Exhausted)?;
         let next_seq = self.seq.checked_add(1).ok_or(RatchetError::Exhausted)?;
-        let header = Header { dh: PublicKey::from(&StaticSecret::from(self.dhs)).to_bytes(), pn: self.pn, n: self.ns, seq: self.seq }.encode();
+        let header = Header { dh: PublicKey::from(&StaticSecret::from(self.dhs)).to_bytes(), pn: self.pn, n: self.ns, seq: self.seq };
+        let enc_header = seal_header(&hk, &self.send_mailbox, id, &header)?;
         let mk = message_key(&ck);
         let body = ChaCha20Poly1305::new(Key::from_slice(&mk.key))
-            .encrypt(Nonce::from_slice(&mk.nonce), Payload { msg: plaintext, aad: &aad(&self.send_mailbox, id, &header) })
+            .encrypt(Nonce::from_slice(&mk.nonce), Payload { msg: plaintext, aad: &aad(&self.send_mailbox, id, &enc_header) })
             .map_err(|_| RatchetError::Auth)?;
         self.cks = Some(next_chain_key(&ck));
         self.ns = next_ns;
         self.seq = next_seq;
-        let mut wire = header.to_vec();
+        self.unanswered = false;
+        let mut wire = enc_header;
         wire.extend_from_slice(&body);
         Ok(b64u_encode(&wire))
+    }
+
+    /// Proběhl DH krok, na který tato strana zatím nic neposlala. Dokud něco nepošle, protistrana její nový klíč
+    /// nezná a konverzace se po úniku stavu neuzdraví; klient proto po čase pošle prázdnou zprávu (keepalive, §13.2).
+    pub fn needs_keepalive(&self) -> bool {
+        self.unanswered && self.cks.is_some()
     }
 
     /// Dešifruje zprávu. Stav (včetně DH kroku) se změní až po ověření tagu, takže podvržená zpráva nic neposune.
@@ -278,32 +348,55 @@ impl Ratchet {
         rng: &mut (impl RngCore + CryptoRng),
     ) -> Result<(u32, Vec<u8>), RatchetError> {
         let wire = b64u_decode(ct).ok_or(RatchetError::Malformed)?;
-        if wire.len() < HEADER_LEN + TAG_LEN {
+        if wire.len() < ENC_HEADER_LEN + TAG_LEN {
             return Err(RatchetError::Malformed);
         }
-        let (head, body) = wire.split_at(HEADER_LEN);
-        let header = Header::parse(head).ok_or(RatchetError::Malformed)?;
+        let (head, body) = wire.split_at(ENC_HEADER_LEN);
         let aad = aad(&self.recv_mailbox, id, head);
 
         // pracuje se na kopii; přijme se, až když sedí tag
         let mut next = self.clone();
-        let mk = next.message_key_for(&header, rng)?;
+        let mk = next.message_key_for(id, head, rng)?;
         let plaintext = ChaCha20Poly1305::new(Key::from_slice(&mk.key))
             .decrypt(Nonce::from_slice(&mk.nonce), Payload { msg: body, aad: &aad })
             .map_err(|_| RatchetError::Auth)?;
         *self = next;
-        Ok((header.seq, plaintext))
+        Ok((mk.seq, plaintext))
     }
 
-    fn message_key_for(&mut self, header: &Header, rng: &mut (impl RngCore + CryptoRng)) -> Result<MessageKey, RatchetError> {
-        if let Some(pos) = self.skipped.iter().position(|s| s.dh == header.dh && s.n == header.n) {
-            let s = self.skipped.remove(pos);
-            return Ok(MessageKey { key: s.key, nonce: s.nonce });
+    /// Najde klíč zprávy podle zašifrované hlavičky: nejdřív klíče hlaviček uložených přeskočených zpráv, pak
+    /// aktuální přijímací řetěz, pak klíč dalšího řetězu (ten znamená DH krok).
+    fn message_key_for(&mut self, id: &[u8; 16], enc: &[u8], rng: &mut (impl RngCore + CryptoRng)) -> Result<Opened, RatchetError> {
+        let mut tried: Vec<[u8; 32]> = Vec::new();
+        let mut current = None;
+        for hk in self.skipped.iter().map(|s| s.hk) {
+            if tried.contains(&hk) {
+                continue;
+            }
+            tried.push(hk);
+            if let Some(header) = open_header(&hk, &self.recv_mailbox, id, enc) {
+                if let Some(pos) = self.skipped.iter().position(|s| s.hk == hk && s.n == header.n) {
+                    let s = self.skipped.remove(pos);
+                    return Ok(Opened { key: s.key, nonce: s.nonce, seq: header.seq });
+                }
+                // přeskočené klíče aktuálního řetězu mají jeho klíč hlavičky: zpráva pokračuje v řetězu
+                if Some(hk) != self.hkr {
+                    return Err(RatchetError::Replayed);
+                }
+                current = Some(header);
+                break;
+            }
         }
-        if self.dhr != Some(header.dh) {
-            self.skip_until(header.pn)?;
-            self.dh_step(&header.dh, rng)?;
-        }
+        let current = current.or_else(|| self.hkr.and_then(|hk| open_header(&hk, &self.recv_mailbox, id, enc)));
+        let header = match current {
+            Some(h) => h,
+            None => {
+                let h = open_header(&self.nhkr, &self.recv_mailbox, id, enc).ok_or(RatchetError::Auth)?;
+                self.skip_until(h.pn)?;
+                self.dh_step(&h.dh, rng)?;
+                h
+            }
+        };
         if header.n < self.nr {
             return Err(RatchetError::Replayed);
         }
@@ -311,18 +404,19 @@ impl Ratchet {
         let ck = self.ckr.ok_or(RatchetError::Malformed)?;
         self.nr = header.n.checked_add(1).ok_or(RatchetError::Exhausted)?;
         self.ckr = Some(next_chain_key(&ck));
-        Ok(message_key(&ck))
+        let mk = message_key(&ck);
+        Ok(Opened { key: mk.key, nonce: mk.nonce, seq: header.seq })
     }
 
     /// Uloží klíče zpráv přijímacího řetězu do `until` (výjimečně), aby šly otevřít, až dorazí.
     fn skip_until(&mut self, until: u32) -> Result<(), RatchetError> {
-        let (Some(mut ck), Some(dhr)) = (self.ckr, self.dhr) else { return Ok(()) };
+        let (Some(mut ck), Some(hkr)) = (self.ckr, self.hkr) else { return Ok(()) };
         if until.saturating_sub(self.nr) > MAX_SKIP {
             return Err(RatchetError::Desync);
         }
         while self.nr < until {
             let mk = message_key(&ck);
-            self.skipped.push(Skipped { dh: dhr, n: self.nr, key: mk.key, nonce: mk.nonce });
+            self.skipped.push(Skipped { hk: hkr, n: self.nr, key: mk.key, nonce: mk.nonce });
             ck = next_chain_key(&ck);
             self.nr += 1;
         }
@@ -334,9 +428,9 @@ impl Ratchet {
 
     /// DH krok: nový přijímací řetěz podle klíče protistrany, pak nový vlastní pár a nový odesílací řetěz.
     fn dh_step(&mut self, peer: &[u8; 32], rng: &mut (impl RngCore + CryptoRng)) -> Result<(), RatchetError> {
-        let (rk, ckr) = kdf_rk(&self.root_key, &dh(&StaticSecret::from(self.dhs), peer)?);
+        let (rk, ckr, nhkr) = kdf_rk(&self.root_key, &dh(&StaticSecret::from(self.dhs), peer)?);
         let fresh = StaticSecret::random_from_rng(rng);
-        let (rk, cks) = kdf_rk(&rk, &dh(&fresh, peer)?);
+        let (rk, cks, nhks) = kdf_rk(&rk, &dh(&fresh, peer)?);
         self.pn = self.ns;
         self.ns = 0;
         self.nr = 0;
@@ -344,7 +438,12 @@ impl Ratchet {
         self.root_key = rk;
         self.ckr = Some(ckr);
         self.cks = Some(cks);
+        self.hks = Some(self.nhks);
+        self.hkr = Some(self.nhkr);
+        self.nhks = nhks;
+        self.nhkr = nhkr;
         self.dhs = fresh.to_bytes();
+        self.unanswered = true;
         Ok(())
     }
 }
@@ -452,9 +551,9 @@ mod tests {
         let (_, mut b) = pair();
         assert_eq!(b.open(&[0; 16], "!!"), Err(RatchetError::Malformed));
         assert_eq!(b.open(&[0; 16], "AAAA"), Err(RatchetError::Malformed));
-        // hlavička s nulovým (slabým) ratchet klíčem
-        let weak = b64u_encode(&[0u8; HEADER_LEN + TAG_LEN]);
-        assert_eq!(b.open(&[0; 16], &weak), Err(RatchetError::WeakKey));
+        // hlavička, kterou nejde otevřít žádným klíčem hlavičky
+        let junk = b64u_encode(&[0u8; ENC_HEADER_LEN + TAG_LEN]);
+        assert_eq!(b.open(&[0; 16], &junk), Err(RatchetError::Auth));
     }
 
     #[test]
@@ -468,6 +567,40 @@ mod tests {
         assert_eq!(a2.open(&id(5), &r).unwrap(), b"r");
         let ct2 = a2.seal(&id(6), b"b").unwrap();
         assert_eq!(b2.open(&id(6), &ct2).unwrap(), b"b");
+    }
+
+    /// Anchor v hlavičce nevidí ratchet klíč ani čítače (spec §13.2).
+    #[test]
+    fn header_hides_ratchet_key_and_counters() {
+        let (mut a, mut b) = pair();
+        let dh_pub = PublicKey::from(&StaticSecret::from(a.dhs)).to_bytes();
+        let c1 = b64u_decode(&a.seal(&id(1), b"x").unwrap()).unwrap();
+        let c2 = b64u_decode(&a.seal(&id(2), b"x").unwrap()).unwrap();
+        assert!(!c1.windows(32).any(|w| w == dh_pub));
+        assert_ne!(c1[..ENC_HEADER_LEN], c2[..ENC_HEADER_LEN], "same chain, but headers must not be linkable");
+        assert_eq!(c1.len(), ENC_HEADER_LEN + 1 + TAG_LEN);
+        assert_eq!(b.open(&id(2), &b64u_encode(&c2)).unwrap(), b"x");
+        assert_eq!(b.open(&id(1), &b64u_encode(&c1)).unwrap(), b"x");
+    }
+
+    #[test]
+    fn keepalive_is_needed_after_a_dh_step_until_something_is_sent() {
+        let (mut a, mut b) = pair();
+        assert!(!a.needs_keepalive());
+        let m = a.seal(&id(1), b"m").unwrap();
+        b.open(&id(1), &m).unwrap();
+        assert!(b.needs_keepalive(), "Bob has a fresh pair Alice does not know");
+        // další zpráva téhož řetězu nic nemění
+        let m2 = a.seal(&id(2), b"m").unwrap();
+        b.open(&id(2), &m2).unwrap();
+        assert!(b.needs_keepalive());
+        let k = b.seal(&id(3), b"").unwrap();
+        assert!(!b.needs_keepalive());
+        assert_eq!(a.open(&id(3), &k).unwrap(), b"");
+        assert!(a.needs_keepalive());
+        // stav s příznakem přežije serializaci
+        let a2: Ratchet = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
+        assert!(a2.needs_keepalive());
     }
 
     /// Post-compromise security: útočník s kopií stavu čte zprávy, jen dokud obě strany neudělají DH krok s novým párem.

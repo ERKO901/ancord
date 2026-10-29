@@ -267,6 +267,11 @@ impl UserKeys {
         self.uk.verifying_key().to_bytes()
     }
 
+    /// Stráž vlastní schránky s obtížností razítka `bits` (§15.13).
+    pub fn inbox_guard(&self, bits: u8, ts: u64) -> crate::guard::Guard {
+        crate::guard::Guard::create(&self.uk, bits, ts)
+    }
+
     pub fn bk_public(&self) -> [u8; 32] {
         PublicKey::from(&self.ik).to_bytes()
     }

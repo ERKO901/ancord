@@ -6,6 +6,7 @@ import { broadcastDirectory, ensureDirectory, epochOf } from "./directory";
 import { publishDirectory } from "./snapshot";
 import { getNode, run, type Load, type NodeRow } from "./store";
 import { log, type RegCtx } from "./context";
+import { parseUnreachable, recordReports } from "./reach";
 
 export interface CfInfo {
   country?: string;
@@ -73,6 +74,11 @@ async function handleHeartbeat(ctx: RegCtx, ws: WebSocket, nodeId: string, msg: 
     ws.send(JSON.stringify({ t: "error", reason: "malformed heartbeat" }));
     return;
   }
+  const unreachable = parseUnreachable(msg.unreachable);
+  if (!unreachable) {
+    ws.send(JSON.stringify({ t: "error", reason: "malformed heartbeat" }));
+    return;
+  }
   if (Math.abs(now - msg.ts) > ctx.cfg.requestSkewS) {
     ws.send(JSON.stringify({ t: "error", reason: "heartbeat timestamp outside allowed window" }));
     return;
@@ -101,6 +107,7 @@ async function handleHeartbeat(ctx: RegCtx, ws: WebSocket, nodeId: string, msg: 
     now,
     nodeId,
   );
+  recordReports(ctx, nodeId, unreachable);
   const epoch = epochOf(now, ctx.cfg.epochSeconds);
   ws.send(JSON.stringify({ t: "ack", seq: msg.seq, epoch }));
   // bez `epoch` node žádný adresář nedrží (čerstvý start), jinak by na něj čekal až do další epochy

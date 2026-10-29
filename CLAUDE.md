@@ -70,5 +70,12 @@ Rules:
 - Graf není zdroj pravdy: kód na disku je. Graf je jen první orientace (kandidátní symboly, vazby, čísla řádků); cokoli důležitého ověř cíleným čtením souboru.
 - Když graf ukáže `soubor L42`, čti jen tu část souboru (offset/limit), ne celý soubor.
 - Dotazy pište úzce, s konkrétním názvem symbolu nebo souboru (`graphify explain "RealCloudflareClient"`), ne obecnou větou; široký dotaz vrací desítky uzlů (~10k tokenů).
+- Změřeno: větná otázka (zvlášť česky) se páruje na slova v dokumentaci a na stejnojmenné symboly v jiném jazyce (`hrw` → test v Rustu místo `worker/src/hrw.ts`) a BFS se rozlije přes hub uzly (`NodeState`, `unix_now`, `b64u_*`; 245 uzlů, výstup se ořízne). Proto:
+  - Znáte-li soubor nebo symbol, použijte `graphify explain "selectNodes()"` (přesné sousedy, ~300 tokenů), nebo `graphify query "<klíčová slova anglicky>" --seed worker/src/hrw.ts --budget 1200`.
+  - Soubory a symboly worker/node se stejným názvem (`hrw.ts` × `hrw.rs`) rozlišujte cestou: `--seed worker/src/hrw.ts`.
+  - Výstup `[!] TRUNCATED` neznamená odpověď; zúžit `--seed`, ne zvyšovat `--budget` na tisíce.
+  - Uzly `src= loc=` bez zdroje (`json`, `arc`, `mpsc`) jsou externí závislosti, přeskočit.
+- Graf nezná obsah `spec/test-vectors/*.json` ani konfigurace (`package.json`, `tsconfig`, `Cargo.toml`, jsou v `.graphifyignore`). Formáty hledejte v `spec/PROTOCOL.md`, závislosti přímo v souborech.
+- `graphify` nemusí být nainstalovaný (cloudové/čisté prostředí: `pip install graphifyy`). Hooky v `.claude/settings.json` pak tiše nic nedělají; v tom případě hledejte běžným Grep/Read.
 - Pro průzkum kódu nespouštěj `Explore` subagenty; použij graphify a cílená čtení v hlavní session.
 - Po změně kódu spusť `graphify update .` (git hooky přestavují graf jen při commitu/checkoutu). Hooky v `.git/hooks` se negitují: v nové kopii repa je nainstaluj `graphify hook install`.

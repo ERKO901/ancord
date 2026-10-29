@@ -16,6 +16,10 @@ const PENDING: TableDefinition<&[u8], u64> = TableDefinition::new("pending");
 const PROFILES: TableDefinition<&[u8], &[u8]> = TableDefinition::new("profiles");
 const PROFILE_FIXED_LEN: usize = 24 + 32 + 32 + 64 + PUSH_ID_LEN + 1;
 
+/// Stráže schránek (`spec/PROTOCOL.md` §15.13), klíč `inbox_id(32)`, hodnota `pk(32) ‖ bits(1) ‖ ts ‖ exp` (u64 BE) `‖ sig(64)`.
+const GUARDS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("guards");
+const GUARD_LEN: usize = 32 + 1 + 16 + 64;
+
 const KEY_LEN: usize = 48;
 const HEADER_LEN: usize = 17;
 const STATE_PENDING: u8 = 0;
@@ -55,6 +59,41 @@ pub struct ProfileRecord {
     pub pow: u64,
     pub sig: [u8; 64],
     pub exp: u64,
+}
+
+/// Stráž schránky: zápis do ní vyžaduje razítko s `bits` (`spec/PROTOCOL.md` §15.13).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuardRecord {
+    pub inbox_id: [u8; 32],
+    pub pk: [u8; 32],
+    pub bits: u8,
+    pub ts: u64,
+    pub sig: [u8; 64],
+    pub exp: u64,
+}
+
+fn encode_guard(g: &GuardRecord) -> Vec<u8> {
+    let mut v = Vec::with_capacity(GUARD_LEN);
+    v.extend_from_slice(&g.pk);
+    v.push(g.bits);
+    v.extend_from_slice(&g.ts.to_be_bytes());
+    v.extend_from_slice(&g.exp.to_be_bytes());
+    v.extend_from_slice(&g.sig);
+    v
+}
+
+fn decode_guard(k: &[u8], v: &[u8]) -> Option<GuardRecord> {
+    if k.len() != 32 || v.len() != GUARD_LEN {
+        return None;
+    }
+    Some(GuardRecord {
+        inbox_id: k.try_into().ok()?,
+        pk: v[..32].try_into().ok()?,
+        bits: v[32],
+        ts: u64::from_be_bytes(v[33..41].try_into().ok()?),
+        exp: u64::from_be_bytes(v[41..49].try_into().ok()?),
+        sig: v[49..].try_into().ok()?,
+    })
 }
 
 /// Stav zprávy z pohledu jednoho anchoru (`spec/PROTOCOL.md` §15.6). Větší hodnota vyhrává při sjednocení.
@@ -192,6 +231,7 @@ impl Store {
         tx.open_table(MESSAGES).map_err(io)?;
         tx.open_table(PENDING).map_err(io)?;
         tx.open_table(PROFILES).map_err(io)?;
+        tx.open_table(GUARDS).map_err(io)?;
         tx.commit().map_err(io)?;
         Ok(Self { db })
     }
@@ -343,6 +383,57 @@ impl Store {
         tx.commit().map_err(io)
     }
 
+    /// Zapíše stráž, je-li novější než uložená (`ts`). Strop `max` počítá stráže dohromady s profily nepřímo: stráž
+    /// patří k adrese, takže jich není víc než profilů.
+    pub fn put_guard(&self, g: &GuardRecord, max: u64) -> Result<PutOutcome, StoreError> {
+        let tx = self.db.begin_write().map_err(io)?;
+        let outcome = {
+            let mut table = tx.open_table(GUARDS).map_err(io)?;
+            let old = table.get(g.inbox_id.as_slice()).map_err(io)?.and_then(|v| decode_guard(&g.inbox_id, v.value()));
+            match old {
+                Some(old) if old.ts >= g.ts => PutOutcome::Duplicate,
+                None if table.len().map_err(io)? >= max => return Err(StoreError::Full),
+                _ => {
+                    table.insert(g.inbox_id.as_slice(), encode_guard(g).as_slice()).map_err(io)?;
+                    PutOutcome::Stored
+                }
+            }
+        };
+        tx.commit().map_err(io)?;
+        Ok(outcome)
+    }
+
+    /// Stráž mailboxu, pokud ji node drží a nevypršela.
+    pub fn guard(&self, inbox_id: &[u8; 32], now: u64) -> Result<Option<GuardRecord>, StoreError> {
+        let tx = self.db.begin_read().map_err(io)?;
+        let table = tx.open_table(GUARDS).map_err(io)?;
+        let rec = table.get(inbox_id.as_slice()).map_err(io)?.and_then(|v| decode_guard(inbox_id, v.value()));
+        Ok(rec.filter(|r| r.exp > now))
+    }
+
+    /// Všechny nevypršené stráže (handoff).
+    pub fn guards(&self, now: u64) -> Result<Vec<GuardRecord>, StoreError> {
+        let tx = self.db.begin_read().map_err(io)?;
+        let table = tx.open_table(GUARDS).map_err(io)?;
+        let mut out = Vec::new();
+        for entry in table.iter().map_err(io)? {
+            let (k, v) = entry.map_err(io)?;
+            out.extend(decode_guard(k.value(), v.value()).filter(|r| r.exp > now));
+        }
+        Ok(out)
+    }
+
+    pub fn remove_guards(&self, ids: &[[u8; 32]]) -> Result<(), StoreError> {
+        let tx = self.db.begin_write().map_err(io)?;
+        {
+            let mut table = tx.open_table(GUARDS).map_err(io)?;
+            for id in ids {
+                table.remove(id.as_slice()).map_err(io)?;
+            }
+        }
+        tx.commit().map_err(io)
+    }
+
     /// Nedoručené a nevypršené zprávy mailboxu seřazené podle `(ts, id)`.
     pub fn pending(&self, mailbox_id: &[u8; 32], limit: usize, now: u64) -> Result<Vec<Record>, StoreError> {
         let mut out: Vec<Record> = self.records(mailbox_id)?.into_iter().filter(|r| r.ct.is_some() && r.exp > now).collect();
@@ -429,6 +520,20 @@ impl Store {
         };
         self.remove_profiles(&stale)?;
         removed += stale.len();
+        let now_guards: Vec<[u8; 32]> = {
+            let tx = self.db.begin_read().map_err(io)?;
+            let table = tx.open_table(GUARDS).map_err(io)?;
+            let mut v = Vec::new();
+            for entry in table.iter().map_err(io)? {
+                let (k, val) = entry.map_err(io)?;
+                if let Some(g) = decode_guard(k.value(), val.value()).filter(|g| g.exp <= now) {
+                    v.push(g.inbox_id);
+                }
+            }
+            v
+        };
+        self.remove_guards(&now_guards)?;
+        removed += now_guards.len();
         Ok(removed)
     }
 }

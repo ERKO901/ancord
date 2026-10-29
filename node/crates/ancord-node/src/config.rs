@@ -109,6 +109,14 @@ pub struct Config {
     #[arg(long, env = "TYPING_MIN_INTERVAL_S", default_value_t = 2)]
     pub typing_min_interval_s: u64,
 
+    /// Po kolika neúspěšných voláních po sobě se peer nahlásí Workeru jako nedosažitelný (spec §6.1).
+    #[arg(long, env = "REACH_MIN_FAILURES", default_value_t = 3)]
+    pub reach_min_failures: u32,
+
+    /// Jak dlouho od posledního neúspěchu se peer hlásí jako nedosažitelný.
+    #[arg(long, env = "REACH_WINDOW_S", default_value_t = 120)]
+    pub reach_window_s: u64,
+
     /// Jak často údržba kontroluje, zda je potřeba handoff po změně epochy.
     #[arg(long, env = "MAINTENANCE_INTERVAL_S", default_value_t = 30)]
     pub maintenance_interval_s: u64,

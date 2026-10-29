@@ -26,6 +26,7 @@ import { publishDirectory, publishSnapshot } from "./snapshot";
 import { scoreOf, isLive } from "./scoring";
 import { all, migrate, one, type NodeRow } from "./store";
 import { handleMessage, onConnect, type CfInfo } from "./ws";
+import { reachTick } from "./reach";
 import { log, type RegCtx } from "./context";
 
 export interface NodeSummary {
@@ -261,6 +262,7 @@ export class Registry extends DurableObject<Env> {
           }
         },
       ],
+      ["reach", () => reachTick(this.rc)],
       ["challenges", () => challengeTick(this.rc)],
       ["snapshot", () => publishSnapshot(this.rc)],
     ];
