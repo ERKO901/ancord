@@ -16,7 +16,7 @@ ids=(); hosts=(); map=()
 for i in $(seq 1 "$N"); do
   d=$RUN/node$i
   id=$(WORKER_URL=http://127.0.0.1:1 DATA_DIR=$d CLOUDFLARED_BIN=none RUST_LOG=info timeout 5 "$NODE" 2>&1 | sed -n 's/.*node_id="\([^"]*\)".*/\1/p' | head -1 || true)
-  ids+=("$id"); map+=("node${id:0:16}.melonet.cz=$((BASE_PORT+i))")
+  ids+=("$id"); map+=("node-${id:0:16}.melonet.cz=$((BASE_PORT+i))")
 done
 GENESIS=$(IFS=,; echo "${ids[*]}")
 

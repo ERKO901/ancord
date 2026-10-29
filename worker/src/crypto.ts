@@ -109,7 +109,7 @@ export function nodeIdOf(pubkey: Uint8Array): string {
 export const HOSTNAME_ID_CHARS = 16;
 
 export function hostnameOf(nodeId: string, zone: string): string {
-  return `node${nodeId.slice(0, HOSTNAME_ID_CHARS)}.${zone}`;
+  return `node-${nodeId.slice(0, HOSTNAME_ID_CHARS)}.${zone}`;
 }
 
 /** Počet úvodních nulových bitů. */

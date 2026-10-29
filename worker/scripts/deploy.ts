@@ -164,8 +164,8 @@ async function main() {
   const rule = {
     ref: TRANSFORM_REF,
     description: "ancord: odstranit IP návštěvníka na node*",
-    // jen `node<16 znaků base32>.<zóna>`: v zóně jsou cizí `node-xxxxxxxx` (regex `matches` free plán nemá)
-    expression: `(starts_with(http.host, "node") and not starts_with(http.host, "node-") and ends_with(http.host, ".${ZONE}") and len(http.host) eq ${"node".length + 16 + ZONE.length + 1})`,
+    // jen `node-<16 znaků base32>.<zóna>` (regex `matches` free plán nemá, proto délka)
+    expression: `(starts_with(http.host, "node-") and ends_with(http.host, ".${ZONE}") and len(http.host) eq ${"node-".length + 16 + ZONE.length + 1})`,
     action: "rewrite",
     action_parameters: { headers: Object.fromEntries(IP_HEADERS.map((h) => [h, { operation: "remove" }])) },
     enabled: true,

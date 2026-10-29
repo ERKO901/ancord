@@ -16,20 +16,20 @@
       {
         "id": "d3wstmlfj66ksrqxabgxs2o7yrsswhzqu6ulo4odjaabkvedhafq",
         "pk": "gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q",
-        "host": "noded3wstmlfj66ksrqx.melonet.cz"
+        "host": "node-d3wstmlfj66ksrqx.melonet.cz"
       },
       {
         "id": "qnlbvwzzr7mh7dt63azrx7zpzokfom6mgajiphfz7kyhskdgobra",
         "pk": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w",
-        "host": "nodeqnlbvwzzr7mh7dt6.melonet.cz"
+        "host": "node-qnlbvwzzr7mh7dt6.melonet.cz"
       },
       {
         "id": "tq4a23x6ylwdsmq5q7ieet7kqohxkkuewcl4oey575t437zjd3yq",
         "pk": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY_k2NsFGFKyHN9E",
-        "host": "nodetq4a23x6ylwdsmq5.melonet.cz"
+        "host": "node-tq4a23x6ylwdsmq5.melonet.cz"
       }
     ]
   },
-  "canonical": "{\"epoch\":41,\"epoch_seconds\":300,\"issued_at\":12300,\"nodes\":[{\"host\":\"noded3wstmlfj66ksrqx.melonet.cz\",\"id\":\"d3wstmlfj66ksrqxabgxs2o7yrsswhzqu6ulo4odjaabkvedhafq\",\"pk\":\"gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q\"},{\"host\":\"nodeqnlbvwzzr7mh7dt6.melonet.cz\",\"id\":\"qnlbvwzzr7mh7dt63azrx7zpzokfom6mgajiphfz7kyhskdgobra\",\"pk\":\"iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w\"},{\"host\":\"nodetq4a23x6ylwdsmq5.melonet.cz\",\"id\":\"tq4a23x6ylwdsmq5q7ieet7kqohxkkuewcl4oey575t437zjd3yq\",\"pk\":\"7UkoxijRwsbq6QM4kFmVYSlZJzpcY_k2NsFGFKyHN9E\"}],\"params\":{\"quorum\":2,\"r\":3},\"v\":1}",
-  "sig": "fT0onH9N2eF5Fx3klTiCJnz05HLc0GSGE1ce7DxMlwDki62zaUmxGNAkWimE4-s0JlaiEx2kXhjpkl7l2LRVBA"
+  "canonical": "{\"epoch\":41,\"epoch_seconds\":300,\"issued_at\":12300,\"nodes\":[{\"host\":\"node-d3wstmlfj66ksrqx.melonet.cz\",\"id\":\"d3wstmlfj66ksrqxabgxs2o7yrsswhzqu6ulo4odjaabkvedhafq\",\"pk\":\"gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q\"},{\"host\":\"node-qnlbvwzzr7mh7dt6.melonet.cz\",\"id\":\"qnlbvwzzr7mh7dt63azrx7zpzokfom6mgajiphfz7kyhskdgobra\",\"pk\":\"iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w\"},{\"host\":\"node-tq4a23x6ylwdsmq5.melonet.cz\",\"id\":\"tq4a23x6ylwdsmq5q7ieet7kqohxkkuewcl4oey575t437zjd3yq\",\"pk\":\"7UkoxijRwsbq6QM4kFmVYSlZJzpcY_k2NsFGFKyHN9E\"}],\"params\":{\"quorum\":2,\"r\":3},\"v\":1}",
+  "sig": "Q-dKrF3A8VUiKgTEcIDSIqxkSwFVCHTCVZ9wet3Ehw-oS6B7w7DH9UKZORzRW5s3arfez24Nxkgvze52zH7XDw"
 }

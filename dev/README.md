@@ -3,7 +3,7 @@
 Šest nodů v Dockeru za Cloudflare Tunnel (fáze C3, `ARCHITECTURE.md` §10 a §12.5) a lokální běh bez Dockeru.
 
 ## Šest nodů v Dockeru (C3)
-Image `ancord-node` (`../node/Dockerfile`) obsahuje node i `cloudflared` (pevná verze, ověřený SHA-256). Node se zaregistruje u Workeru, dostane token tunelu a spustí `cloudflared` jako podproces. Žádný kontejner nepublikuje port, node je dosažitelný jen přes `node<id>.melonet.cz`. Každý node má vlastní volume s klíčem a databází (`node_id` přežije restart i `docker compose down`, ne `down -v`).
+Image `ancord-node` (`../node/Dockerfile`) obsahuje node i `cloudflared` (pevná verze, ověřený SHA-256). Node se zaregistruje u Workeru, dostane token tunelu a spustí `cloudflared` jako podproces. Žádný kontejner nepublikuje port, node je dosažitelný jen přes `node-<id>.melonet.cz`. Každý node má vlastní volume s klíčem a databází (`node_id` přežije restart i `docker compose down`, ne `down -v`).
 
 Kontejnery běží jako neprivilegovaný uživatel, s read-only kořenovým systémem souborů, bez capabilities a s `no-new-privileges`. `docker stop` node ukončí čistě (SIGTERM).
 
@@ -29,7 +29,7 @@ cd dev && docker compose up -d
 docker compose ps                     # všech 6 „healthy“
 docker compose logs -f node1          # registered, cloudflared started, node activated
 curl -H "authorization: Bearer $(cat ~/.config/ancord/admin-token)" https://ancord.melonet.cz/admin/nodes
-curl https://node<id>.melonet.cz/health
+curl https://node-<id>.melonet.cz/health
 ```
 Klient: `WORKER_PUBKEY=… ancord --worker https://ancord.melonet.cz route` (CLI je i v image: `docker compose exec node1 ancord …`, soubory do `/tmp`).
 

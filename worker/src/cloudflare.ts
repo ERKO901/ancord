@@ -16,11 +16,11 @@ export interface CloudflareClient {
   deleteTunnel(tunnelId: string, name: string): Promise<void>;
 }
 
-/** Hostname, který smí Worker spravovat: `node<16 znaků base32>.<zóna>`. */
+/** Hostname, který smí Worker spravovat: `node-<16 znaků base32>.<zóna>`. */
 export function isManagedHostname(hostname: string, zone: string): boolean {
   const suffix = `.${zone}`;
   if (!hostname.endsWith(suffix)) return false;
-  return /^node[a-z2-7]{16}$/.test(hostname.slice(0, -suffix.length));
+  return /^node-[a-z2-7]{16}$/.test(hostname.slice(0, -suffix.length));
 }
 
 interface ApiEnvelope<T> {

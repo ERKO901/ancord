@@ -32,7 +32,7 @@ Pořadí (podrobně v sekci 12.4):
 Ve fázích A a B nic nenasazuj, nevytvářej nic v Cloudflare a nečti `.env`. Milník je hotový až po splnění kritéria přijetí.
 
 ## Cloudflare (firemní zóna melonet.cz)
-- Worker: `ancord.melonet.cz`, nody: `node<id>.melonet.cz` (jedna úroveň pod zónou).
+- Worker: `ancord.melonet.cz`, nody: `node-<id>.melonet.cz` (jedna úroveň pod zónou).
 - Přihlašovací údaje jsou v proměnných prostředí `CLOUDFLARE_API_TOKEN` a `CLOUDFLARE_ACCOUNT_ID`. Hodnoty nikdy nevypisuj.
 - Zóna je sdílená s existujícími službami: před zápisem přečti existující DNS záznamy, měň jen záznamy s prefixem `node` a `ancord`, nic jiného. Před každým krokem, který v Cloudflare něco vytváří nebo nasazuje, počkej na potvrzení uživatele.
 

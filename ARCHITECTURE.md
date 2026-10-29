@@ -37,7 +37,7 @@ Klient ─(1) /route─►│  API, tickety  ◄───► registr, skóre, lo
    ▲                │      │               (WS hibernation)       snapshot   │
    │                │   Cron: challenge   Queues: push    R2: bandwidth bloby│
    │                └──────┬─────────────────────────────────────────────────┘
-   │(2) top-3 nody + ticket│ Tunnel + DNS node<id>.<doména>
+   │(2) top-3 nody + ticket│ Tunnel + DNS node-<id>.<doména>
    │                       ▼
    └─(3) WSS + ticket─► Node A ◄── podepsané requesty ──► Node B, Node C
                          (cloudflared, Rust)             (anchory mailboxu)
@@ -51,14 +51,14 @@ Tok:
 ## 4. Skrytí IP
 
 ### Nody
-- Při registraci Worker přes Cloudflare API vytvoří **vlastní Tunnel pro každý node** a DNS záznam `node<id>.<doména>` (např. `node7k2m4q9x3a.melonet.cz`). Vše je plně automatické: node zná jen adresu Workeru, sám si vygeneruje klíč, zaregistruje se, dostane tunnel token a spustí `cloudflared`. Nepotřebuje veřejnou IP, otevřený port ani vlastní certifikát.
+- Při registraci Worker přes Cloudflare API vytvoří **vlastní Tunnel pro každý node** a DNS záznam `node-<id>.<doména>` (např. `node-qx7c2a5k3m4ztdwp.melonet.cz`). Vše je plně automatické: node zná jen adresu Workeru, sám si vygeneruje klíč, zaregistruje se, dostane tunnel token a spustí `cloudflared`. Nepotřebuje veřejnou IP, otevřený port ani vlastní certifikát.
 - **Jméno je jedna úroveň pod zónou**, ne `<id>.nodes.<doména>`: bezplatný univerzální certifikát pokrývá jen `*.<doména>`, dvouúrovňová jména by vyžadovala placený Advanced Certificate Manager. `<id>` je krátký prefix `node_id` (base32, např. 10 bajtů; DNS label má limit 63 znaků). Při kolizi Worker registraci odmítne.
 - Worker smí upravovat a mazat **pouze** DNS záznamy s prefixem `node` a tunely, které sám vytvořil. Ostatní záznamy zóny se nedotýká.
 - Hostname vlastníme my, takže odpadá `rejectUnauthorized: false` a důkaz kontroly endpointu je jednoduchý (viz 5.1).
 
 ### Uživatelé
 Cloudflare k požadavku přidává `CF-Connecting-IP`, `X-Forwarded-For`, `True-Client-IP` a podobné hlavičky. Operátor nodu by je viděl, proto:
-- **Varianta A (doporučená)**: Transform Rule odstraňující hlavičky s IP návštěvníka, **omezená výrazem na hostname `node*.<doména>`**. Managed transform „Remove visitor IP headers“ platí pro celou zónu, takže na sdílené (firemní) zóně by změnil chování ostatních služeb a nepoužívá se. Žádný Worker v data plane, nejlevnější a nejrychlejší. **[ověřit]**, že pravidlo pokrývá WebSocket upgrade a že nic neprosakuje.
+- **Varianta A (doporučená)**: Transform Rule odstraňující hlavičky s IP návštěvníka, **omezená výrazem na hostname `node-*.<doména>`**. Managed transform „Remove visitor IP headers“ platí pro celou zónu, takže na sdílené (firemní) zóně by změnil chování ostatních služeb a nepoužívá se. Žádný Worker v data plane, nejlevnější a nejrychlejší. **[ověřit]**, že pravidlo pokrývá WebSocket upgrade a že nic neprosakuje.
 - **Varianta B**: gateway Worker před nodem, který hlavičky sestaví sám. Největší kontrola, ale Worker je v data plane, přidává latenci a účtuje se.
 - Ticket je vázaný na ephemeral klíč klienta, ne na IP.
 
@@ -306,11 +306,11 @@ Vývoj běží na firemní zóně **`melonet.cz`** (sdílená zóna s existujíc
 | Co | Hostname |
 |---|---|
 | Load balancer / control plane (Worker, custom domain) | `ancord.melonet.cz` |
-| Nody | `node<id>.melonet.cz` |
+| Nody | `node-<id>.melonet.cz` |
 
-- **Přihlašovací údaje** jsou v proměnných prostředí `CLOUDFLARE_API_TOKEN` a `CLOUDFLARE_ACCOUNT_ID` (volitelné, deploy ho zjistí z tokenu). Hodnoty se nikdy nevypisují ani necommitují. Kontrola z C1 (2026-10-29): token je účtový, má oprávnění pro Workers Scripts, KV, R2, Queues a Cloudflare Tunnel, ale **žádná zónová oprávnění pro `melonet.cz`** (DNS čtení vrací `10000 Authentication error`). Pro nasazení je nutné doplnit pro zónu: DNS Edit, Workers Routes Edit, Transform Rules Edit. Seznam oprávnění je v `worker/README.md` (Nasazení). Doplněno týž den; zóna má 51 záznamů, `ancord.melonet.cz` je volné a je v ní 33 cizích A záznamů `node-xxxxxxxx.melonet.cz` (s pomlčkou). Naše jména `node<16 znaků base32>` s nimi nekolidují, ale každý výraz nad `node*` je musí vyloučit (Transform Rule kontroluje i délku hostname a `node-`).
+- **Přihlašovací údaje** jsou v proměnných prostředí `CLOUDFLARE_API_TOKEN` a `CLOUDFLARE_ACCOUNT_ID` (volitelné, deploy ho zjistí z tokenu). Hodnoty se nikdy nevypisují ani necommitují. Kontrola z C1 (2026-10-29): token je účtový, má oprávnění pro Workers Scripts, KV, R2, Queues a Cloudflare Tunnel, ale **žádná zónová oprávnění pro `melonet.cz`** (DNS čtení vrací `10000 Authentication error`). Pro nasazení je nutné doplnit pro zónu: DNS Edit, Workers Routes Edit, Transform Rules Edit. Seznam oprávnění je v `worker/README.md` (Nasazení). Doplněno týž den; zóna měla 51 záznamů, `ancord.melonet.cz` bylo volné a 33 starých A záznamů `node-xxxxxxxx.melonet.cz` se na pokyn uživatele smazalo. Nody pak přešly na jména `node-<16 znaků base32>` (PROTOCOL.md §2).
 - **Dva tokeny**: `CLOUDFLARE_API_TOKEN` slouží k nasazení (wrangler). Worker za běhu používá vlastní, užší token (Tunnel Edit + DNS Edit jen pro zónu) uložený přes `wrangler secret`, ne v kódu.
-- **Bezpečnost sdílené zóny**: před jakýmkoli zápisem se přečtou existující DNS záznamy a ověří se, že `ancord` ani `node*` nic nepřepíšou. Automatika maže jen záznamy s prefixem `node` a tunely, které sama vytvořila. `dev/cleanup` smaže všechny vývojové node záznamy a tunely. Před každým krokem, který v Cloudflare něco vytváří nebo nasazuje, se čeká na potvrzení uživatele.
+- **Bezpečnost sdílené zóny**: před jakýmkoli zápisem se přečtou existující DNS záznamy a ověří se, že `ancord` ani `node-*` nic nepřepíšou. Automatika maže jen záznamy `node-<id>` s komentářem `ancord-managed` a tunely, které sama vytvořila. `dev/cleanup` smaže všechny vývojové node záznamy a tunely. Před každým krokem, který v Cloudflare něco vytváří nebo nasazuje, se čeká na potvrzení uživatele.
 - Queues a R2 zatím nejsou potřeba (až A4 a A5).
 
 ### 12.4 Pořadí prací a milníky
@@ -323,7 +323,7 @@ Vývoj běží na firemní zóně **`melonet.cz`** (sdílená zóna s existujíc
 
 **Stav (uživatelský tok před fází C):** adresa `ancord:<pk>` (text, QR), push klíče schránky (v profilu) a konverzací (ze sdíleného tajemství, vektor `pairwise.json`), registrace tokenu z CLI (`push-register`) a online klient (`ancord online`: jedno spojení, schránka i konverzace, automatické přijetí kontaktů, znovupřipojení s novým `/route`). E2E test ověřuje celý tok: první kontakt vzbudí offline příjemce, po připojení přijme kontakt a zprávy živě, po odpojení ho další zpráva vzbudí znovu. Soubory klíčů a konverzací jsou zamčené, aby dva procesy nepoužily stejný klíč ratchetu dvakrát. Mobilní klient (skenování QR, FCM/APNs token) zůstává mimo rozsah.
 
-**Stav (fáze C):** připravený kód, nic není nasazeno. `worker/scripts/deploy.ts` (`npm run deploy`) provádí C1 a C2: bez `--apply` jen čte a vypíše plán i blokery, s `--apply` vytvoří KV, R2, fronty, Transform Rule pro `node*`, tajemství a nasadí Worker na custom doménu. `dev/docker-compose.yml` (C3) se 6 nody, `node/Dockerfile` (node + `cloudflared`), `dev/bootstrap.sh` (klíče nodů a genesis allowlist před prvním startem, `ancord-node --init-identity`), `dev/cleanup.sh`. Compose je ověřený lokálně proti `wrangler dev` (mock Cloudflare, forwarder místo tunelu): 6 nodů `active`, všechny challenge prošly, doručení přes různé nody i po výpadku jednoho, restart se stejným `node_id`. Nasazení blokují chybějící zónová oprávnění tokenu (12.3) a užší token Workeru (`ANCORD_RUNTIME_CF_TOKEN`). Měření C3 (sekce 9) zbývá.
+**Stav (fáze C):** připravený kód, nic není nasazeno. `worker/scripts/deploy.ts` (`npm run deploy`) provádí C1 a C2: bez `--apply` jen čte a vypíše plán i blokery, s `--apply` vytvoří KV, R2, fronty, Transform Rule pro `node-*`, tajemství a nasadí Worker na custom doménu. `dev/docker-compose.yml` (C3) se 6 nody, `node/Dockerfile` (node + `cloudflared`), `dev/bootstrap.sh` (klíče nodů a genesis allowlist před prvním startem, `ancord-node --init-identity`), `dev/cleanup.sh`. Compose je ověřený lokálně proti `wrangler dev` (mock Cloudflare, forwarder místo tunelu): 6 nodů `active`, všechny challenge prošly, doručení přes různé nody i po výpadku jednoho, restart se stejným `node_id`. Nasazení blokují chybějící zónová oprávnění tokenu (12.3) a užší token Workeru (`ANCORD_RUNTIME_CF_TOKEN`). Měření C3 (sekce 9) zbývá.
 
 **Deploy a DNS se ve fázích A a B neřešily.** Nejdřív se napíše a lokálně otestuje kód, nasazení na Cloudflare a Docker prostředí přijdou až ve fázi C. Fáze A a B nic nevytvářejí v Cloudflare a nepotřebují DNS ani `.env`.
 
@@ -331,7 +331,7 @@ Vývoj běží na firemní zóně **`melonet.cz`** (sdílená zóna s existujíc
 
 | | Obsah | Kritérium přijetí |
 |---|---|---|
-| **A1** Registrace | `POST /register`, challenge nonce, ověření podpisu, registr nodů v Durable Objectu. Volání Cloudflare API (vytvoření tunelu a DNS `node<id>.<doména>`) je za rozhraním `CloudflareClient` s implementací pro skutečné API a mockem pro testy. Stavy nodu `pending` → `active`. | Vitest/Miniflare: registrace projde, kolize jména i špatný podpis jsou odmítnuty, Worker maže jen záznamy a tunely, které sám vytvořil. |
+| **A1** Registrace | `POST /register`, challenge nonce, ověření podpisu, registr nodů v Durable Objectu. Volání Cloudflare API (vytvoření tunelu a DNS `node-<id>.<doména>`) je za rozhraním `CloudflareClient` s implementací pro skutečné API a mockem pro testy. Stavy nodu `pending` → `active`. | Vitest/Miniflare: registrace projde, kolize jména i špatný podpis jsou odmítnuty, Worker maže jen záznamy a tunely, které sám vytvořil. |
 | **A2** Heartbeat a adresář | Podepsaný heartbeat přes WebSocket na DO (hibernation), podepsaný adresář s číslem epochy, genesis allowlist, pevný interval epoch, profily dev/prod. | Test: nody ve stejné epoše dostanou stejný adresář, odpojení nodu změní epochu v pevném intervalu. |
 | **A3** Routing | KV snapshot, `GET /route` (3 nody, power-of-two-choices, filtr podle `request.cf`), ticket vázaný na efemérní klíč. | Test: `/route` vrací 3 nody, přestane vracet vypnutý node, ticket projde ověřením podle `spec/test-vectors/`. |
 | **A4** Challenge | CPU hash-chain, Proof of Space s Merkle commitmentem, bandwidth challenge, skóre nodu. | Test: node, který lže o specs, dostane nižší skóre než poctivý. |
@@ -352,9 +352,9 @@ Spec (`spec/PROTOCOL.md` a testovací vektory) vzniká spolu s A1–A3, protože
 
 | | Obsah | Kritérium přijetí |
 |---|---|---|
-| **C1** Příprava | Kontrola tokenu a oprávnění, čtení existujících DNS záznamů, Transform Rule pro `node*.melonet.cz`. | Žádný existující záznam zóny se nezměnil. |
+| **C1** Příprava | Kontrola tokenu a oprávnění, čtení existujících DNS záznamů, Transform Rule pro `node-*.melonet.cz`. | Žádný existující záznam zóny se nezměnil. |
 | **C2** Nasazení Workeru | `wrangler deploy` na `ancord.melonet.cz`. | `https://ancord.melonet.cz/health` odpovídá. |
-| **C3** Šest nodů | `dev/`: Docker Compose se 6 nody, které znají jen `WORKER_URL`. | `docker compose up` bez dalšího nastavení: všech 6 nodů se zaregistruje, je dosažitelných na `node<id>.melonet.cz` bez příchozích portů. Změří se a zapíšou do sekce 9: odstranění IP hlaviček u WebSocket upgrade, idle timeout, limity tunelů a DNS záznamů na účtu. |
+| **C3** Šest nodů | `dev/`: Docker Compose se 6 nody, které znají jen `WORKER_URL`. | `docker compose up` bez dalšího nastavení: všech 6 nodů se zaregistruje, je dosažitelných na `node-<id>.melonet.cz` bez příchozích portů. Změří se a zapíšou do sekce 9: odstranění IP hlaviček u WebSocket upgrade, idle timeout, limity tunelů a DNS záznamů na účtu. |
 
 Pokud limity počtu tunelů nebo DNS záznamů nestačí, rozhodne se o sdíleném tunelu (bod 2 v sekci 9) až na základě naměřených čísel z C3. Body 1, 2 a 5 v sekci 9 jsou blokující pro nasazení, ne pro psaní kódu.
 

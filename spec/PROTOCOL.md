@@ -58,7 +58,7 @@ HTTP chyby mají tvar `{"error":{"code":"<kód>","message":"<text>"}}`. Kódy js
 
 - Node má perzistentní Ed25519 klíč. `pubkey` je 32 B (b64u).
 - `node_id = base32(blake3(pubkey))` (32 B → 52 znaků).
-- `hostname = "node" ‖ node_id[0..16] ‖ "." ‖ zone` (prvních 16 znaků = 10 bajtů hashe). Příklad: `nodeqx7c2a5k3m4ztdwp.melonet.cz`. Dvě různé `pubkey` se shodným prefixem jsou kolize, registrace druhého nodu se odmítne (`409`).
+- `hostname = "node-" ‖ node_id[0..16] ‖ "." ‖ zone` (prvních 16 znaků = 10 bajtů hashe). Příklad: `node-qx7c2a5k3m4ztdwp.melonet.cz`. Dvě různé `pubkey` se shodným prefixem jsou kolize, registrace druhého nodu se odmítne (`409`).
 
 ## 3. Podepsané HTTP requesty (node → Worker)
 

@@ -2,10 +2,10 @@
   "description": "Podpis potvrzení registrace a hashcash (spec §4.2)",
   "seed": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
   "pubkey": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w",
-  "hostname": "nodeqnlbvwzzr7mh7dt6.melonet.cz",
+  "hostname": "node-qnlbvwzzr7mh7dt6.melonet.cz",
   "nonce": "sayRC_FiC1YM3bS5Zt41-rJJ-qZMA20qlsxzNYxPTBw",
-  "signing_input_hex": "616e636f72642f76312f726567697374657200b1ac910bf1620b560cddb4b966de35fab249faa64c036d2a96cc73358c4f4c1c6e6f6465716e6c6276777a7a72376d68376474362e6d656c6f6e65742e637a8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-  "signature": "BzGOyNBTY10qFgT6z4TGs4z415Ph42b56A5h2lYAkEd33Ftol_ZvRZjzVOCyWpRkm89kkR4d2_W3DragK1OdDA",
+  "signing_input_hex": "616e636f72642f76312f726567697374657200b1ac910bf1620b560cddb4b966de35fab249faa64c036d2a96cc73358c4f4c1c6e6f64652d716e6c6276777a7a72376d68376474362e6d656c6f6e65742e637a8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+  "signature": "WTxPT1QH4410hMZhJJl7SpSt2PtyHWOxMoi-2GoKUfWCbfhJgWC-oGyJx22exPspid01DPSMsvBnYLBgJ4dnDQ",
   "hashcash": {
     "bits": 12,
     "counter": 20265,

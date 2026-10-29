@@ -4,7 +4,7 @@
  *   npx tsx scripts/cleanup.ts            vypíše, co by smazal
  *   npx tsx scripts/cleanup.ts --apply    smaže
  *
- * Maže jen DNS záznamy `node<16 znaků base32>.melonet.cz` s komentářem `ancord-managed` a tunely s prefixem
+ * Maže jen DNS záznamy `node-<16 znaků base32>.melonet.cz` s komentářem `ancord-managed` a tunely s prefixem
  * `ancord-`, tedy přesně to, co vytváří Worker. Worker, KV, R2, fronty ani cizí záznamy zóny nemaže.
  * Běžící nody si po smazání při dalším startu zaregistrují tunel a DNS znovu.
  */
@@ -43,7 +43,7 @@ async function main() {
 
   const records = await cf<{ id: string; name: string; type: string; comment?: string | null }[]>(
     "GET",
-    `/zones/${zoneId}/dns_records?per_page=5000&name.startswith=node`,
+    `/zones/${zoneId}/dns_records?per_page=5000&name.startswith=node-`,
   );
   const dns = records.filter((r) => isManagedHostname(r.name, ZONE) && r.comment === MANAGED_COMMENT);
   const tunnels = (await cf<{ id: string; name: string }[]>("GET", `/accounts/${accountId}/cfd_tunnel?is_deleted=false&per_page=1000`)).filter(

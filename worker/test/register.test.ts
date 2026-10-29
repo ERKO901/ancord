@@ -23,12 +23,12 @@ async function nodeRow(nodeId: string) {
 }
 
 describe("registrace (A1)", () => {
-  it("projde: tunel a DNS pro node<id>.zóna, stav pending → active", async () => {
+  it("projde: tunel a DNS pro node-<id>.zóna, stav pending → active", async () => {
     const n = await newNode();
     const { begin, confirm, res } = await n.register();
     expect(res.status).toBe(200);
     expect(begin.hostname).toBe(hostnameOf(n.nodeId, ZONE));
-    expect(begin.hostname).toMatch(/^node[a-z2-7]{16}\.melonet\.cz$/);
+    expect(begin.hostname).toMatch(/^node-[a-z2-7]{16}\.melonet\.cz$/);
     expect(confirm.status).toBe("pending");
     expect(confirm.tunnel_token).toMatch(/^token-for-/);
     expect(confirm.proof_path).toBe("/.well-known/melo-proof");
@@ -294,7 +294,7 @@ describe("CloudflareClient (bezpečnost sdílené zóny)", () => {
     }) as typeof fetch;
     return { fetcher, calls };
   }
-  const host = "nodeabcdefghijklmnop.melonet.cz";
+  const host = "node-abcdefghijklmnop.melonet.cz";
 
   it("odmítne zapisovat a mazat cizí jména", async () => {
     const { fetcher, calls } = fakeApi(() => ({ result: [] }));

@@ -82,14 +82,14 @@ pub fn node_id_of(pubkey: &[u8; 32]) -> String {
 
 pub fn hostname_of(node_id: &str, zone: &str) -> String {
     let prefix: String = node_id.chars().take(HOSTNAME_ID_CHARS).collect();
-    format!("node{prefix}.{zone}")
+    format!("node-{prefix}.{zone}")
 }
 
 /// Hostname vrácený Workerem musí odpovídat našemu `node_id` (jinak by nám Worker mohl podstrčit cizí jméno).
 pub fn hostname_matches(node_id: &str, hostname: &str) -> bool {
     let prefix: String = node_id.chars().take(HOSTNAME_ID_CHARS).collect();
     hostname
-        .strip_prefix("node")
+        .strip_prefix("node-")
         .and_then(|rest| rest.strip_prefix(prefix.as_str()))
         .is_some_and(|rest| rest.starts_with('.') && rest.len() > 1)
 }
@@ -120,8 +120,8 @@ mod tests {
     #[test]
     fn hostname_check() {
         let id = "qnlbvwzzr7mh7dt63azrx7zpzokfom6mgajiphfz7kyhskdgobra";
-        assert!(hostname_matches(id, "nodeqnlbvwzzr7mh7dt6.melonet.cz"));
-        assert!(!hostname_matches(id, "nodeqnlbvwzzr7mh7dt7.melonet.cz"));
-        assert!(!hostname_matches(id, "nodeqnlbvwzzr7mh7dt6."));
+        assert!(hostname_matches(id, "node-qnlbvwzzr7mh7dt6.melonet.cz"));
+        assert!(!hostname_matches(id, "node-qnlbvwzzr7mh7dt7.melonet.cz"));
+        assert!(!hostname_matches(id, "node-qnlbvwzzr7mh7dt6."));
     }
 }
