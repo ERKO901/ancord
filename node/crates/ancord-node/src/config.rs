@@ -116,6 +116,11 @@ pub struct Config {
     /// Jak často se uklízí vypršené zprávy.
     #[arg(long, env = "JANITOR_INTERVAL_S", default_value_t = 3600)]
     pub janitor_interval_s: u64,
+
+    /// Jen vytvoří (nebo načte) klíč v `DATA_DIR`, vypíše `node_id` na stdout a skončí. Slouží k sestavení
+    /// genesis allowlistu před prvním startem; Worker se nevolá.
+    #[arg(long)]
+    pub init_identity: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]

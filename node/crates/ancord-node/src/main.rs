@@ -48,6 +48,10 @@ async fn resolve_worker_key(cfg: &Config, worker: &WorkerClient) -> Result<[u8; 
 async fn run() -> Result<(), NodeError> {
     let cfg = Config::parse();
     let identity = Identity::load_or_create(&cfg.data_dir)?;
+    if cfg.init_identity {
+        println!("{}", identity.node_id());
+        return Ok(());
+    }
     tracing::info!(node_id = identity.node_id(), pubkey = %identity.pubkey_b64(), "identity loaded");
     let worker = WorkerClient::new(&cfg.worker_url)?;
     let worker_key = resolve_worker_key(&cfg, &worker).await?;
@@ -64,6 +68,16 @@ async fn run() -> Result<(), NodeError> {
         r = supervisor::run(state, worker) => r,
         r = server => Err(NodeError(format!("http server stopped: {r:?}"))),
         r = upkeep => Err(NodeError(format!("maintenance stopped: {r:?}"))),
-        _ = tokio::signal::ctrl_c() => { tracing::info!("shutting down"); Ok(()) }
+        r = shutdown_signal() => { r?; tracing::info!("shutting down"); Ok(()) }
     }
+}
+
+/// Ctrl-C nebo SIGTERM (`docker stop`).
+async fn shutdown_signal() -> Result<(), NodeError> {
+    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    tokio::select! {
+        r = tokio::signal::ctrl_c() => r?,
+        _ = term.recv() => {}
+    }
+    Ok(())
 }

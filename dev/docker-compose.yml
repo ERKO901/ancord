@@ -1,0 +1,38 @@
+# Šest nodů za Cloudflare Tunnel (ARCHITECTURE.md §10 a §12.5). Návod v README.md.
+# Žádná služba nepublikuje port: node je dosažitelný jen přes tunel, který si sám otevře (odchozí spojení).
+name: ancord
+
+x-env: &env
+  WORKER_URL: ${WORKER_URL:?nastavte WORKER_URL v dev/.env}
+  WORKER_PUBKEY: ${WORKER_PUBKEY:-}
+  RUST_LOG: ${RUST_LOG:-info}
+
+x-node: &node
+  image: ancord-node:local
+  build: ../node
+  restart: unless-stopped
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  stop_grace_period: 20s
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  node1: { <<: *node, environment: { <<: *env, NODE_NAME: node1 }, volumes: ["node1-data:/data"] }
+  node2: { <<: *node, environment: { <<: *env, NODE_NAME: node2 }, volumes: ["node2-data:/data"] }
+  node3: { <<: *node, environment: { <<: *env, NODE_NAME: node3 }, volumes: ["node3-data:/data"] }
+  node4: { <<: *node, environment: { <<: *env, NODE_NAME: node4 }, volumes: ["node4-data:/data"] }
+  node5: { <<: *node, environment: { <<: *env, NODE_NAME: node5 }, volumes: ["node5-data:/data"] }
+  node6: { <<: *node, environment: { <<: *env, NODE_NAME: node6 }, volumes: ["node6-data:/data"] }
+
+# Klíč a databáze každého nodu; smazání volume znamená nový node_id (a nový záznam v genesis allowlistu).
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+  node4-data:
+  node5-data:
+  node6-data:

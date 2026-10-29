@@ -44,10 +44,15 @@ Worker (`cd worker`):
 - `npm run check` – typecheck + testy
 - `npm run vectors` – přegeneruje `spec/test-vectors/` z referenčních funkcí (po změně formátu protokolu; změnu pak musí splnit i node)
 - `npx wrangler dev` – lokální běh (profil `dev`, mock Cloudflare API)
+- `npm run deploy` – plán nasazení (jen čte); `npm run deploy -- --apply` nasadí (C1, C2; viz `worker/README.md`). Spouštět s `--apply` jen po potvrzení uživatele
 
 Node (`cd node`, Cargo workspace `ancord-node` + `ancord-cli`):
 - `cargo clippy --all-targets -- -D warnings` – bez varování
 - `cargo test` – vektory ze `spec/test-vectors/` + data plane (`tests/dataplane.rs`) + e2e test B1–B3 (spustí `wrangler dev` a 3 nody; vyžaduje `npm install` ve `worker/`, jinak se přeskočí; `ANCORD_SKIP_E2E=1` ho vypne)
 - `cargo run -p ancord-node` – node (`WORKER_URL` je jediný povinný vstup, viz `node/README.md`)
 
-`dev/` zatím neexistuje.
+Dev (`cd dev`, viz `dev/README.md`):
+- `./bootstrap.sh` – klíče 6 nodů ve volume a `genesis.txt` pro allowlist Workeru
+- `docker compose up -d` – 6 nodů za Cloudflare Tunnel (C3), bez publikovaných portů
+- `./cleanup.sh` – vypíše vývojové node DNS záznamy a tunely; `--apply` je smaže
+- `./local.sh [N]` – Worker a N nodů lokálně bez Dockeru a Cloudflare

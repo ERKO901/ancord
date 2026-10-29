@@ -17,3 +17,8 @@ target/
 dist/
 .wrangler/
 __pycache__/
+
+# fáze C: vygenerované při nasazení (id účtu, zóny, KV; node_id)
+worker/wrangler.production.json
+dev/genesis.txt
+dev/genesis.txt.tmp

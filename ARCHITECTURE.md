@@ -227,6 +227,8 @@ Cena: operátor anchoru profilu vidí, že adresa `pk` existuje a kdy aktualizov
 10. Velikost sítě nad stovky nodů: shardování registru (DO) a frekvence epoch. Pro 3–20 nodů se neřeší.
 11. ~~Post-compromise security~~ vyřešeno: Double Ratchet s DH krokem (`spec/PROTOCOL.md` §13.2, klient `node/crates/ancord-node/src/ratchet.rs`). Zbývá šifrování hlavičky ratchetu (anchor vidí `dh`, `pn`, `n`, `seq`) a uzdravení jednostranných konverzací (prázdná „keepalive“ zpráva). Dále spam do schránky (`inbox`) a ztráta klíčů zařízení (záloha vs. forward secrecy).
 
+Poznámka k bodu 1 (zatím nezměřeno): custom Transform Rule smí odstranit `x-forwarded-for`, `true-client-ip` a `x-real-ip`, hlavičky `cf-*` (včetně `cf-connecting-ip`) podle dokumentace Cloudflare nikoli **[ověřit]**. Node žádnou z těchto hlaviček nečte ani neloguje a `cloudflared` je předává jen lokálně na `localhost:8080`, takže IP uživatele neopustí kontejner nodu; provozovatel nodu ji ale vidět může.
+
 **Blokující body** jsou 1, 2 a 5. Ověřit je prototypem (viz fáze 0) dřív, než vznikne další kód.
 
 ## 10. Profily dev/prod a bootstrap
@@ -306,8 +308,8 @@ Vývoj běží na firemní zóně **`melonet.cz`** (sdílená zóna s existujíc
 | Load balancer / control plane (Worker, custom domain) | `ancord.melonet.cz` |
 | Nody | `node<id>.melonet.cz` |
 
-- **Přihlašovací údaje** jsou v `/home/erko/code/.env` (mimo repozitář `ancord`): `SECRET_CF` (API token, dočasný, platnost 7 dní) a `ACC_ID` (Cloudflare account id). Soubor se nikdy nekopíruje do projektu, nevypisuje a necommituje. Token zatím pokrývá zónu a DNS; **před nasazením (fáze C) je nutné ověřit** (a případně doplnit) oprávnění pro Workers Scripts, Durable Objects, KV a Cloudflare Tunnel (Edit) a Transform Rules.
-- **Dva tokeny**: `SECRET_CF` slouží k nasazení (wrangler). Worker za běhu používá vlastní, užší token (Tunnel Edit + DNS Edit jen pro zónu) uložený přes `wrangler secret`, ne v kódu.
+- **Přihlašovací údaje** jsou v proměnných prostředí `CLOUDFLARE_API_TOKEN` a `CLOUDFLARE_ACCOUNT_ID` (volitelné, deploy ho zjistí z tokenu). Hodnoty se nikdy nevypisují ani necommitují. Kontrola z C1 (2026-10-29): token je účtový, má oprávnění pro Workers Scripts, KV, R2, Queues a Cloudflare Tunnel, ale **žádná zónová oprávnění pro `melonet.cz`** (DNS čtení vrací `10000 Authentication error`). Pro nasazení je nutné doplnit pro zónu: DNS Edit, Workers Routes Edit, Transform Rules Edit. Seznam oprávnění je v `worker/README.md` (Nasazení).
+- **Dva tokeny**: `CLOUDFLARE_API_TOKEN` slouží k nasazení (wrangler). Worker za běhu používá vlastní, užší token (Tunnel Edit + DNS Edit jen pro zónu) uložený přes `wrangler secret`, ne v kódu.
 - **Bezpečnost sdílené zóny**: před jakýmkoli zápisem se přečtou existující DNS záznamy a ověří se, že `ancord` ani `node*` nic nepřepíšou. Automatika maže jen záznamy s prefixem `node` a tunely, které sama vytvořila. `dev/cleanup` smaže všechny vývojové node záznamy a tunely. Před každým krokem, který v Cloudflare něco vytváří nebo nasazuje, se čeká na potvrzení uživatele.
 - Queues a R2 zatím nejsou potřeba (až A4 a A5).
 
@@ -321,7 +323,9 @@ Vývoj běží na firemní zóně **`melonet.cz`** (sdílená zóna s existujíc
 
 **Stav (uživatelský tok před fází C):** adresa `ancord:<pk>` (text, QR), push klíče schránky (v profilu) a konverzací (ze sdíleného tajemství, vektor `pairwise.json`), registrace tokenu z CLI (`push-register`) a online klient (`ancord online`: jedno spojení, schránka i konverzace, automatické přijetí kontaktů, znovupřipojení s novým `/route`). E2E test ověřuje celý tok: první kontakt vzbudí offline příjemce, po připojení přijme kontakt a zprávy živě, po odpojení ho další zpráva vzbudí znovu. Soubory klíčů a konverzací jsou zamčené, aby dva procesy nepoužily stejný klíč ratchetu dvakrát. Mobilní klient (skenování QR, FCM/APNs token) zůstává mimo rozsah.
 
-**Deploy a DNS se zatím neřeší.** Nejdřív se napíše a lokálně otestuje kód, nasazení na Cloudflare a Docker prostředí přijdou až ve fázi C. Fáze A a B nic nevytvářejí v Cloudflare a nepotřebují DNS ani `.env`.
+**Stav (fáze C):** připravený kód, nic není nasazeno. `worker/scripts/deploy.ts` (`npm run deploy`) provádí C1 a C2: bez `--apply` jen čte a vypíše plán i blokery, s `--apply` vytvoří KV, R2, fronty, Transform Rule pro `node*`, tajemství a nasadí Worker na custom doménu. `dev/docker-compose.yml` (C3) se 6 nody, `node/Dockerfile` (node + `cloudflared`), `dev/bootstrap.sh` (klíče nodů a genesis allowlist před prvním startem, `ancord-node --init-identity`), `dev/cleanup.sh`. Compose je ověřený lokálně proti `wrangler dev` (mock Cloudflare, forwarder místo tunelu): 6 nodů `active`, všechny challenge prošly, doručení přes různé nody i po výpadku jednoho, restart se stejným `node_id`. Nasazení blokují chybějící zónová oprávnění tokenu (12.3) a užší token Workeru (`ANCORD_RUNTIME_CF_TOKEN`). Měření C3 (sekce 9) zbývá.
+
+**Deploy a DNS se ve fázích A a B neřešily.** Nejdřív se napíše a lokálně otestuje kód, nasazení na Cloudflare a Docker prostředí přijdou až ve fázi C. Fáze A a B nic nevytvářejí v Cloudflare a nepotřebují DNS ani `.env`.
 
 **Fáze A: Worker (load balancer a control plane), TypeScript, složka `worker/`. Dělá se jako první.**
 

@@ -56,6 +56,11 @@ ancord --worker $WORKER_URL recv bob.json               # vypíše, dešifruje a
 ```
 Soubor konverzace obsahuje klíče (práva 0600) a stav ratchetu; ukládá se před odesláním, aby se číslo zprávy nepoužilo dvakrát. Obnova ze zálohy stavu ratchet poškodí. Ratchet je Double Ratchet: konverzace se po úniku stavu uzdraví, jakmile si strany vymění zprávy v obou směrech. Responder může psát až po první zprávě iniciátora.
 
+## Docker
+`Dockerfile` sestaví image s `ancord-node`, CLI `ancord` a `cloudflared` (pevná verze a SHA-256, amd64 i arm64): `docker build -t ancord-node node/`. Kontejner běží jako uživatel `ancord` (uid 10001), data jsou ve volume `/data`, `HEALTHCHECK` volá `/health`. Šest nodů v Compose: `../dev/README.md`.
+
+`ancord-node --init-identity` jen vytvoří (nebo načte) klíč v `DATA_DIR`, vypíše `node_id` a skončí, bez kontaktu s Workerem; slouží k sestavení genesis allowlistu. Node končí čistě na Ctrl-C i SIGTERM.
+
 ## Konfigurace nodu
 Jediný povinný vstup je `WORKER_URL`. Ostatní má výchozí hodnotu nebo se změří na hostiteli (`ancord-node --help`).
 
