@@ -22,3 +22,4 @@ __pycache__/
 worker/wrangler.production.json
 dev/genesis.txt
 dev/genesis.txt.tmp
+graphify-out/.graphify_build_state.json
