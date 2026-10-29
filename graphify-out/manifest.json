@@ -1,8 +1,8 @@
 {
   "ARCHITECTURE.md": {
-    "mtime": 1792948414.3618405,
-    "seen": 1792948507.6203372,
-    "ast_hash": "3fafe7591bd59754c0b6b46e1b18a701",
+    "mtime": 1793258877.2992008,
+    "seen": 1793258979.4966075,
+    "ast_hash": "c687d23421eb1a00c1bb06ff067ea599",
     "semantic_hash": ""
   },
   "CLAUDE.md": {
@@ -90,9 +90,9 @@
     "semantic_hash": ""
   },
   "worker/scripts/gen-vectors.ts": {
-    "mtime": 1792945421.8532224,
-    "seen": 1792945498.102315,
-    "ast_hash": "0e90a24b7c89697eca9d2758de9db36e",
+    "mtime": 1792956910.539194,
+    "seen": 1792957159.0879967,
+    "ast_hash": "d0643f8562568fe4915a9470ba370d3f",
     "semantic_hash": ""
   },
   "worker/src/auth.ts": {
@@ -138,9 +138,9 @@
     "semantic_hash": ""
   },
   "worker/src/cloudflare.ts": {
-    "mtime": 1792929331.2389793,
-    "seen": 1792930871.1622658,
-    "ast_hash": "f313e0e069cd085d57ce23adf473063c",
+    "mtime": 1793258896.3843634,
+    "seen": 1793258979.4965277,
+    "ast_hash": "05d1de59d3c545d49a33404c69134517",
     "semantic_hash": ""
   },
   "worker/src/config.ts": {
@@ -150,9 +150,9 @@
     "semantic_hash": ""
   },
   "worker/src/crypto.ts": {
-    "mtime": 1792932053.000617,
-    "seen": 1792932425.2806244,
-    "ast_hash": "c102bada3c45e958c459411698053645",
+    "mtime": 1792952227.3945105,
+    "seen": 1792953241.3477433,
+    "ast_hash": "3ba74af3b4ce5b622ce01828b8cdd1bc",
     "semantic_hash": ""
   },
   "worker/src/encoding.ts": {
@@ -216,9 +216,9 @@
     "semantic_hash": ""
   },
   "worker/src/push/senders.ts": {
-    "mtime": 1792929252.1329036,
-    "seen": 1792930871.1622887,
-    "ast_hash": "a115b5189d4704773ef2e1f387e0d424",
+    "mtime": 1793258896.3845773,
+    "seen": 1793258979.496555,
+    "ast_hash": "22d136031543fbe50b4ef58a6768514d",
     "semantic_hash": ""
   },
   "worker/src/push/store.ts": {
@@ -318,9 +318,9 @@
     "semantic_hash": ""
   },
   "worker/test/routing.test.ts": {
-    "mtime": 1792929784.105972,
-    "seen": 1792930871.1623209,
-    "ast_hash": "52d171b01d5e64fb1e1926f1522f1933",
+    "mtime": 1792948972.925659,
+    "seen": 1792949012.0102098,
+    "ast_hash": "65da901f7d4f12fe355902dd12fcf936",
     "semantic_hash": ""
   },
   "worker/test/smoke.test.ts": {
@@ -342,15 +342,15 @@
     "semantic_hash": ""
   },
   "worker/test/unit.test.ts": {
-    "mtime": 1792930332.3161914,
-    "seen": 1792930871.1623278,
-    "ast_hash": "6b1f0e73085ddbb3bba2290d0456acc3",
+    "mtime": 1793258902.7967687,
+    "seen": 1793258979.4965987,
+    "ast_hash": "7c760d363849eb029ef107ec7e6cb191",
     "semantic_hash": ""
   },
   "worker/test/vectors.test.ts": {
-    "mtime": 1792932053.000911,
-    "seen": 1792932425.2806933,
-    "ast_hash": "4a307e83844b85bcc8c6b0250419b39f",
+    "mtime": 1792952227.3949542,
+    "seen": 1792953241.3478136,
+    "ast_hash": "20f2badb5fd86ab19102d949c4a76e3c",
     "semantic_hash": ""
   },
   "worker/tsconfig.json": {
@@ -366,15 +366,15 @@
     "semantic_hash": ""
   },
   "spec/PROTOCOL.md": {
-    "mtime": 1792947064.423723,
-    "seen": 1792948507.6203432,
-    "ast_hash": "7823ad0396b6dba2bbab2f90712cf108",
+    "mtime": 1793258716.402005,
+    "seen": 1793258979.4966161,
+    "ast_hash": "8da22e614483240776f06e715cb71b17",
     "semantic_hash": ""
   },
   "spec/THREAT_MODEL.md": {
-    "mtime": 1792945494.9511743,
-    "seen": 1792945498.1024218,
-    "ast_hash": "d0390fec28553e7516519b5330c65f91",
+    "mtime": 1793258869.538958,
+    "seen": 1793258979.496618,
+    "ast_hash": "0b8f343f2f927543ee2c22dd1279ad65",
     "semantic_hash": ""
   },
   "worker/README.md": {
@@ -384,33 +384,33 @@
     "semantic_hash": ""
   },
   "node/Cargo.toml": {
-    "mtime": 1792945418.1078808,
-    "seen": 1792945498.1021857,
-    "ast_hash": "c02452ea98b3963a77b14c503e5d0941",
+    "mtime": 1793258298.3572488,
+    "seen": 1793258979.4963644,
+    "ast_hash": "b299b30a453d8772a03376b6dd8c4996",
     "semantic_hash": ""
   },
   "node/crates/ancord-cli/Cargo.toml": {
-    "mtime": 1792931505.439636,
-    "seen": 1792932425.2805092,
-    "ast_hash": "2cc604d923250d037077fcd5a570ab50",
+    "mtime": 1793258289.925161,
+    "seen": 1793258979.4963677,
+    "ast_hash": "d6df81ac0c2490e5330a6ab8e107ac8a",
     "semantic_hash": ""
   },
   "node/crates/ancord-cli/src/lib.rs": {
-    "mtime": 1792947203.8843021,
-    "seen": 1792948507.6201186,
-    "ast_hash": "f766cd835d593249d829742d1075bcde",
+    "mtime": 1793258355.6047924,
+    "seen": 1793258979.49637,
+    "ast_hash": "035cec80d4f42653804d33d7e1267e2b",
     "semantic_hash": ""
   },
   "node/crates/ancord-cli/src/main.rs": {
-    "mtime": 1792945418.1083186,
-    "seen": 1792945498.1022017,
-    "ast_hash": "408edc451007a898b3fbc54fb6e524ef",
+    "mtime": 1793258833.691048,
+    "seen": 1793258979.4963725,
+    "ast_hash": "8750bcae946970a31d602f9dd37cab71",
     "semantic_hash": ""
   },
   "node/crates/ancord-node/Cargo.toml": {
-    "mtime": 1792945418.1083186,
-    "seen": 1792945498.1022038,
-    "ast_hash": "053ca8e9f8624fc169c608868ee17e9f",
+    "mtime": 1792951567.8106794,
+    "seen": 1792953241.3476074,
+    "ast_hash": "bef7fb9db766855734cf86b27a62bddb",
     "semantic_hash": ""
   },
   "node/crates/ancord-node/src/canonical.rs": {
@@ -444,15 +444,15 @@
     "semantic_hash": ""
   },
   "node/crates/ancord-node/src/client.rs": {
-    "mtime": 1792947088.1256163,
-    "seen": 1792948507.6201382,
-    "ast_hash": "68088a66e1ba90de8bef77a3164ae492",
+    "mtime": 1792955328.9449234,
+    "seen": 1792955588.2836447,
+    "ast_hash": "ce40e823d40078103c0944d39462e410",
     "semantic_hash": ""
   },
   "node/crates/ancord-node/src/config.rs": {
-    "mtime": 1792947088.1201499,
-    "seen": 1792948507.6201403,
-    "ast_hash": "edd713e4ab13465ccb61130d50b2747c",
+    "mtime": 1792955224.156374,
+    "seen": 1792955588.283647,
+    "ast_hash": "03a1f9780aaeb58a7ce32c172f0b3038",
     "semantic_hash": ""
   },
   "node/crates/ancord-node/src/control.rs": {
@@ -486,15 +486,15 @@
     "semantic_hash": ""
   },
   "node/crates/ancord-node/src/lib.rs": {
-    "mtime": 1792947092.6967828,
-    "seen": 1792948507.6201575,
-    "ast_hash": "c2aab6b5399418811c152642f4d11d09",
+    "mtime": 1792955270.0516672,
+    "seen": 1792955588.2836647,
+    "ast_hash": "e52e87fc56490d8fc7ff00f652b9c8b1",
     "semantic_hash": ""
   },
   "node/crates/ancord-node/src/main.rs": {
-    "mtime": 1792945418.1083186,
-    "seen": 1792945498.1022403,
-    "ast_hash": "67cc69bcd43a5ba38fc6556e95b9c65c",
+    "mtime": 1792951876.5346038,
+    "seen": 1792953241.3476443,
+    "ast_hash": "aedc8814a997eb3b7e389a8656e17309",
     "semantic_hash": ""
   },
   "node/crates/ancord-node/src/register.rs": {
@@ -510,15 +510,15 @@
     "semantic_hash": ""
   },
   "node/crates/ancord-node/src/sign.rs": {
-    "mtime": 1792931538.017069,
-    "seen": 1792932425.280549,
-    "ast_hash": "9bc23aacfc02c81e9d34d7daf84de8b1",
+    "mtime": 1793258243.4969342,
+    "seen": 1793258979.4964395,
+    "ast_hash": "b2b291ad5c60eaff7ce88c47df9e1986",
     "semantic_hash": ""
   },
   "node/crates/ancord-node/src/state.rs": {
-    "mtime": 1792947088.1196527,
-    "seen": 1792948507.6201742,
-    "ast_hash": "428a58233ed3074cf47fb102586be4ca",
+    "mtime": 1792955341.0648353,
+    "seen": 1792955588.2836885,
+    "ast_hash": "b60ae4d777dc0a61b2b8fe749f527416",
     "semantic_hash": ""
   },
   "node/crates/ancord-node/src/supervisor.rs": {
@@ -558,33 +558,27 @@
     "semantic_hash": ""
   },
   "node/crates/ancord-node/tests/e2e.rs": {
-    "mtime": 1792948269.944126,
-    "seen": 1792948507.6201959,
-    "ast_hash": "4acd6b2b2ee8c41dab9c9338fd3f56f0",
+    "mtime": 1793258475.1074908,
+    "seen": 1793258979.4964654,
+    "ast_hash": "2c6e5f7df87788aaa672f098a082d362",
     "semantic_hash": ""
   },
   "node/crates/ancord-node/tests/vectors.rs": {
-    "mtime": 1792945418.1093187,
-    "seen": 1792945498.1022842,
-    "ast_hash": "252df09060595d2d3b4351f4d178ec20",
-    "semantic_hash": ""
-  },
-  "spec/test-vectors/client-auth.json": {
-    "mtime": 1792945422.5063124,
-    "seen": 1792945498.1022885,
-    "ast_hash": "bc4f36512fa87e0f4571c3d6bec9e3ea",
+    "mtime": 1793258128.2011707,
+    "seen": 1793258979.4964674,
+    "ast_hash": "e88c2441aa56e684c8bc7f007318d412",
     "semantic_hash": ""
   },
   "node/README.md": {
-    "mtime": 1792948424.2862968,
-    "seen": 1792948507.6203413,
-    "ast_hash": "977fc9a9d85679b3fca28f093e823b56",
+    "mtime": 1793258869.5397816,
+    "seen": 1793258979.4966142,
+    "ast_hash": "b6795063537da11efc8549706afbfed8",
     "semantic_hash": ""
   },
   "node/crates/ancord-node/src/data.rs": {
-    "mtime": 1792947092.6450953,
-    "seen": 1792948507.6201446,
-    "ast_hash": "3226cf62e74b158e0590d3a11edbf891",
+    "mtime": 1792955281.1711385,
+    "seen": 1792955588.2836516,
+    "ast_hash": "b24b46a8c2be76e5af3c3209d7e350dc",
     "semantic_hash": ""
   },
   "node/crates/ancord-node/src/hrw.rs": {
@@ -594,45 +588,129 @@
     "semantic_hash": ""
   },
   "node/crates/ancord-node/src/maintenance.rs": {
-    "mtime": 1792945076.0634155,
-    "seen": 1792945498.1022506,
-    "ast_hash": "52a40692a5bbfeff158293b1bcc96e92",
+    "mtime": 1792950363.873901,
+    "seen": 1792950522.5249093,
+    "ast_hash": "11d0b64dedaae597d411889bac3ed895",
     "semantic_hash": ""
   },
   "node/crates/ancord-node/src/peer.rs": {
-    "mtime": 1792947088.1266112,
-    "seen": 1792948507.6201637,
-    "ast_hash": "98d7e4f6016dfb59696dfaeeb77424e1",
+    "mtime": 1792955460.6844635,
+    "seen": 1792955588.2836728,
+    "ast_hash": "3e195b91f85fe3c548a7e066fc6a1cf0",
     "semantic_hash": ""
   },
   "node/crates/ancord-node/src/ratchet.rs": {
-    "mtime": 1792945595.1483912,
-    "seen": 1792946816.6961522,
-    "ast_hash": "942e6d4bd446e5701da4adaf5663da36",
+    "mtime": 1792957063.1796446,
+    "seen": 1792957159.08792,
+    "ast_hash": "0947ac49a87577828b41311f33ae370b",
     "semantic_hash": ""
   },
   "node/crates/ancord-node/src/store.rs": {
-    "mtime": 1792945130.6200564,
-    "seen": 1792945498.1022656,
-    "ast_hash": "d1fcddd748ffd917d3281179d824cd47",
+    "mtime": 1793258079.3850765,
+    "seen": 1793258979.4964437,
+    "ast_hash": "5b36901b2a5ec2340a945419f2f5a098",
     "semantic_hash": ""
   },
   "node/crates/ancord-node/tests/dataplane.rs": {
-    "mtime": 1792947147.6537085,
-    "seen": 1792948507.6201937,
-    "ast_hash": "0e12ca293bd37d00bbcc1ce17e5cfb17",
+    "mtime": 1793258157.1721482,
+    "seen": 1793258979.4964633,
+    "ast_hash": "f8a5e2ff3f7ffb8d8ec35620e9134cf5",
     "semantic_hash": ""
   },
   "spec/test-vectors/ratchet.json": {
-    "mtime": 1792945422.5163124,
-    "seen": 1792945498.1023035,
-    "ast_hash": "4ae6ea776659509fa3d4234f33096779",
+    "mtime": 1792956907.6989114,
+    "seen": 1792957159.0879843,
+    "ast_hash": "0e08fb2f54750b24ae72e658f568628c",
     "semantic_hash": ""
   },
   "node/crates/ancord-node/src/wake.rs": {
-    "mtime": 1792947087.9398327,
-    "seen": 1792948507.6201892,
-    "ast_hash": "d371c53c958a01aa179cb4edf2264490",
+    "mtime": 1793258716.3958404,
+    "seen": 1793258979.4964588,
+    "ast_hash": "9b507cffe2e0944a4f44afd860eba94c",
+    "semantic_hash": ""
+  },
+  "dev/local-forward.py": {
+    "mtime": 1792949435.4625428,
+    "seen": 1792949576.8975465,
+    "ast_hash": "91f442b5feb7f95e6bc9d8d594b2ae28",
+    "semantic_hash": ""
+  },
+  "dev/local.sh": {
+    "mtime": 1792951876.5350075,
+    "seen": 1792953241.347592,
+    "ast_hash": "1454db52ae130f9bb3dc50f4d9c55007",
+    "semantic_hash": ""
+  },
+  "dev/README.md": {
+    "mtime": 1792949574.3399272,
+    "seen": 1792949576.8977833,
+    "ast_hash": "53c07a2019bac2d0c4d05668d0e3fed6",
+    "semantic_hash": ""
+  },
+  "node/crates/ancord-node/src/presence.rs": {
+    "mtime": 1792955320.9490604,
+    "seen": 1792955588.283675,
+    "ast_hash": "7dbeb58513a0288e210489eee8a50874",
+    "semantic_hash": ""
+  },
+  "node/crates/ancord-node/src/channel.rs": {
+    "mtime": 1792951696.364185,
+    "seen": 1792953241.3476212,
+    "ast_hash": "fb62084431e091f58fc5a691c92c090c",
+    "semantic_hash": ""
+  },
+  "node/crates/ancord-node/src/n2n.rs": {
+    "mtime": 1792951845.9445424,
+    "seen": 1792953241.3476489,
+    "ast_hash": "6d51e7fe0f9cea38664b67f5ece7b727",
+    "semantic_hash": ""
+  },
+  "spec/reference/channel.py": {
+    "mtime": 1792951620.7500722,
+    "seen": 1792953241.347688,
+    "ast_hash": "ef6b1106ac32d8cd54d89938e8d1b665",
+    "semantic_hash": ""
+  },
+  "spec/test-vectors/channel.json": {
+    "mtime": 1792951621.0990746,
+    "seen": 1792953241.3476923,
+    "ast_hash": "287d19035ff03bf74fbf81f97ad7794f",
+    "semantic_hash": ""
+  },
+  "node/crates/ancord-node/src/profile.rs": {
+    "mtime": 1793258075.5093164,
+    "seen": 1793258979.4964304,
+    "ast_hash": "d867f33d920328c4096244ec95a8468e",
+    "semantic_hash": ""
+  },
+  "node/crates/ancord-node/src/user.rs": {
+    "mtime": 1793258113.245153,
+    "seen": 1793258979.4964566,
+    "ast_hash": "0434a0d318efc014fe00c70ef7043a77",
+    "semantic_hash": ""
+  },
+  "spec/reference/pairwise.py": {
+    "mtime": 1793258054.8782003,
+    "seen": 1793258979.496472,
+    "ast_hash": "63ef29d7406ebf50afb25a7e63db1b15",
+    "semantic_hash": ""
+  },
+  "spec/test-vectors/pairwise.json": {
+    "mtime": 1793258055.0359337,
+    "seen": 1793258979.4964921,
+    "ast_hash": "d5de62064de4238eeb115c04ede6dbbd",
+    "semantic_hash": ""
+  },
+  "spec/reference/ratchet.py": {
+    "mtime": 1792956900.5915108,
+    "seen": 1792957159.0879602,
+    "ast_hash": "f399c6e0ed85282f38cc3996f56cefc8",
+    "semantic_hash": ""
+  },
+  "node/crates/ancord-cli/src/online.rs": {
+    "mtime": 1793258355.6050582,
+    "seen": 1793258979.496375,
+    "ast_hash": "88aaff916ab305b2c547d13219248758",
     "semantic_hash": ""
   }
 }

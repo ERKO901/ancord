@@ -93,6 +93,22 @@ pub struct Config {
     #[arg(long, env = "PRESENCE_RENEW_S", default_value_t = 20)]
     pub presence_renew_s: u64,
 
+    /// Obtížnost hashcash profilu uživatele v bitech (spec §15.2).
+    #[arg(long, env = "PROFILE_POW_BITS", default_value_t = 10)]
+    pub profile_pow_bits: u32,
+
+    /// Jak dlouho se uchovává profil bez obnovení (spec §15.2).
+    #[arg(long, env = "PROFILE_TTL_S", default_value_t = 90 * 24 * 3600)]
+    pub profile_ttl_s: u64,
+
+    /// Strop počtu profilů na tomto nodu.
+    #[arg(long, env = "MAX_PROFILES", default_value_t = 1_000_000)]
+    pub max_profiles: u64,
+
+    /// Nejkratší odstup mezi dvěma stejnými signály psaní téhož mailboxu (spec §15.5).
+    #[arg(long, env = "TYPING_MIN_INTERVAL_S", default_value_t = 2)]
+    pub typing_min_interval_s: u64,
+
     /// Jak často údržba kontroluje, zda je potřeba handoff po změně epochy.
     #[arg(long, env = "MAINTENANCE_INTERVAL_S", default_value_t = 30)]
     pub maintenance_interval_s: u64,

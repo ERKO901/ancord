@@ -2,7 +2,7 @@
 //!
 //! Cloudflare Tunnel vidí HTTP provoz mezi nody, proto se nepoužívá holé JSON API. `POST /n/hs` naváže session
 //! (podepsaný request, efemerní X25519, odpověď podepsaná identitou nodu) a `POST /n/x` nese šifrované operace
-//! `put`, `get`, `ack`, `presence` a `deliver`. Žádná z operací není dostupná jinak.
+//! `put`, `get`, `ack`, `presence`, `deliver` a operace profilů, signálů a stavu doručení (§15.9). Žádná z operací není dostupná jinak.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,6 +19,7 @@ use crate::channel::{self, Ephemeral, SessionKeys};
 use crate::data::{self, DataError, MAX_ACK_IDS};
 use crate::encoding::{b64u_decode_array, b64u_encode};
 use crate::presence;
+use crate::profile::{self, Profile};
 use crate::sign::{verify_request, DOMAIN_N2N_RESP};
 use crate::state::NodeState;
 use crate::store::PutOutcome;
@@ -67,6 +68,8 @@ impl From<DataError> for ApiError {
             DataError::MailboxFull => Self::new(507, "mailbox_full", e.to_string()),
             DataError::BadRequest(_) => Self::new(400, "bad_request", e.to_string()),
             DataError::TooLarge => Self::new(413, "too_large", e.to_string()),
+            DataError::InvalidProof => Self::new(400, "invalid_proof", e.to_string()),
+            DataError::NotFound => Self::new(404, "not_found", e.to_string()),
             _ => Self::new(503, "unavailable", e.to_string()),
         }
     }
@@ -192,6 +195,11 @@ async fn dispatch(st: &Arc<NodeState>, caller: &[u8; 32], op: &str, body: &Value
         "ack" => ack(st, body).await,
         "presence" => presence_update(st, caller, body),
         "deliver" => deliver(st, caller, body),
+        "profile_put" => profile_put(st, body).await,
+        "profile_get" => profile_get(st, body).await,
+        "signal" => signal(st, body),
+        "typing" => typing(st, caller, body),
+        "status" => status(st, body).await,
         _ => Err(ApiError::new(400, "bad_request", "unknown operation")),
     }
 }
@@ -254,6 +262,51 @@ fn deliver(st: &NodeState, caller: &[u8; 32], body: &Value) -> Result<Value, Api
         return Err(ApiError::new(403, "forbidden", "caller is not an anchor of this mailbox"));
     }
     Ok(json!({"delivered": presence::deliver_local(st, &mailbox, id, ts, &ct)}))
+}
+
+/// Profil uživatele od jiného nodu. Příjemce ho ověří znovu a musí být anchorem `profile_id`.
+async fn profile_put(st: &Arc<NodeState>, body: &Value) -> Result<Value, ApiError> {
+    let profile = Profile::from_json(body).ok_or(DataError::BadRequest("invalid profile"))?;
+    if !data::is_anchor(st, &profile::profile_id(&profile.pk)) {
+        return Err(ApiError::new(403, "forbidden", "not an anchor of this profile"));
+    }
+    let outcome = profile::put_local(st, &profile).await?;
+    Ok(json!({"status": if outcome == PutOutcome::Stored { "stored" } else { "duplicate" }}))
+}
+
+async fn profile_get(st: &Arc<NodeState>, body: &Value) -> Result<Value, ApiError> {
+    let pk = profile::parse_pk(body["pk"].as_str().ok_or(DataError::BadRequest("missing pk"))?)?;
+    if !data::is_anchor(st, &profile::profile_id(&pk)) {
+        return Err(ApiError::new(403, "forbidden", "not an anchor of this profile"));
+    }
+    let found = profile::get_local(st, pk).await?;
+    Ok(json!({"profile": found.map(|p| p.to_json())}))
+}
+
+/// Gateway odesílatele hlásí anchoru, že odesílatel píše. Předání gateway příjemce běží na pozadí.
+fn signal(st: &Arc<NodeState>, body: &Value) -> Result<Value, ApiError> {
+    let mailbox = anchored_mailbox(st, body)?;
+    let on = body["on"].as_bool().ok_or(DataError::BadRequest("missing on"))?;
+    let st = st.clone();
+    tokio::spawn(async move { presence::relay_typing(&st, &mailbox, on).await });
+    Ok(json!({"ok": true}))
+}
+
+/// Anchor předává signál psaní gateway příjemce.
+fn typing(st: &NodeState, caller: &[u8; 32], body: &Value) -> Result<Value, ApiError> {
+    let mailbox = data::parse_mailbox(body["mailbox_id"].as_str().ok_or(DataError::BadRequest("missing mailbox_id"))?)?;
+    let on = body["on"].as_bool().ok_or(DataError::BadRequest("missing on"))?;
+    if !data::is_anchor_pubkey(st, caller, &mailbox) {
+        return Err(ApiError::new(403, "forbidden", "caller is not an anchor of this mailbox"));
+    }
+    Ok(json!({"delivered": presence::deliver_typing(st, &mailbox, on)}))
+}
+
+async fn status(st: &Arc<NodeState>, body: &Value) -> Result<Value, ApiError> {
+    let mailbox = anchored_mailbox(st, body)?;
+    let ids = parse_ids(&body["ids"])?;
+    let states = data::status_local(st, mailbox, ids).await?;
+    Ok(json!({"states": states.iter().map(|s| s.as_str()).collect::<Vec<_>>()}))
 }
 
 /// Seznam `id` zpráv (`ack`), nejvýše `MAX_ACK_IDS`.

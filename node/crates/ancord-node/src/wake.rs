@@ -12,6 +12,11 @@ use crate::time::unix_now;
 
 pub const PUSH_ID_LEN: usize = 52;
 
+/// `push_id` push klíče: `base32(blake3(push_pubkey))` (spec §10.1).
+pub fn push_id_of(push_pubkey: &[u8; 32]) -> String {
+    crate::encoding::base32_encode(blake3::hash(push_pubkey).as_bytes())
+}
+
 /// `push_id` je `base32(blake3(push_pubkey))`: 52 znaků `[a-z2-7]`.
 pub fn parse_push_id(s: &str) -> Result<String, DataError> {
     if s.len() == PUSH_ID_LEN && s.bytes().all(|b| matches!(b, b'a'..=b'z' | b'2'..=b'7')) {
@@ -53,7 +58,16 @@ pub fn spawn(st: &Arc<NodeState>, push_id: String, mailbox_id: [u8; 32]) {
     tokio::spawn(async move {
         let body = json!({"push_id": push_id, "mailbox_id": b64u_encode(&mailbox_id)});
         match st.worker.signed(st.identity.signing_key(), Method::POST, "/wake", Some(&body)).await {
-            Ok(answer) => tracing::debug!(status = answer["status"].as_str().unwrap_or("?"), "wake sent"),
+            Ok(answer) => {
+                let status = answer["status"].as_str().unwrap_or("?");
+                // žádný push neodešel (příjemce token zatím neregistroval): příští zpráva má smět budit hned
+                if status == "no_token" {
+                    if let Ok(mut last) = st.wake_last.lock() {
+                        last.remove(&push_id);
+                    }
+                }
+                tracing::debug!(status, "wake sent");
+            }
             Err(e) => tracing::warn!(error = %e, "wake failed"),
         }
     });

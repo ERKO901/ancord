@@ -224,6 +224,10 @@ export function sharedMockClient(): MockCloudflareClient {
 }
 
 export function createCloudflareClient(env: Env, fetcher: typeof fetch = fetch): CloudflareClient {
+  // mock mimo profil dev by v produkci potichu nevytvářel tunely ani DNS
+  if (env.PROFILE !== "dev" && env.CLOUDFLARE_MODE !== "real") {
+    throw new Error(`CLOUDFLARE_MODE must be 'real' outside the dev profile (PROFILE=${env.PROFILE})`);
+  }
   if (env.CLOUDFLARE_MODE === "real") {
     return new RealCloudflareClient(env.CF_API_TOKEN ?? "", env.CF_ACCOUNT_ID, env.CF_ZONE_ID, env.ZONE_DOMAIN, fetcher);
   }

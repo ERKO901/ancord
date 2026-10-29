@@ -246,7 +246,7 @@ Worker pošle 2–3 nodům z různých ASN: `{"kind":"witness","target_id":"…"
 ## 10. Push
 
 ### 10.1 Registrace tokenu
-Klient odvodí z mailbox tajemství push klíč (Ed25519) a `push_id = base32(blake3(push_pubkey))`.
+Push klíč je Ed25519 a `push_id = base32(blake3(push_pubkey))`. Klient má dva druhy push klíčů (§15.11): klíč schránky, jehož `push_id` je v profilu, a klíč každého příchozího mailboxu konverzace, odvozený ze sdíleného tajemství. Worker je nerozlišuje. Klient registruje stejný token pod všemi svými `push_id`.
 
 `POST /push/register`:
 ```json
@@ -263,7 +263,7 @@ Podepsaný request (§3) anchoru, tělo `{"push_id":"…","mailbox_id":"<b64u 32
 Hodnoty parametrů (R, kvorum, epocha, intervaly, hashcash, limity ASN, parametry challenge) jsou v profilech `dev`/`prod`/`open` (`worker/src/config.ts`), ne v protokolu. Protokol je přenáší jen v adresáři (`params`) a ve výzvách.
 
 ## 12. Testovací vektory
-`test-vectors/*.json` obsahují deterministické vstupy a očekávané výstupy pro: `node_id` a hostname, kanonické JSON, podpis registrace a důkazu, hashcash, podepsaný request, heartbeat, adresář, ticket, HRW, hash-chain, Merkle/space, push registraci, mailbox a ratchet (§13). Obě implementace musí projít všechny.
+`test-vectors/*.json` obsahují deterministické vstupy a očekávané výstupy pro: `node_id` a hostname, kanonické JSON, podpis registrace a důkazu, hashcash, podepsaný request, heartbeat, adresář, ticket, HRW, hash-chain, Merkle/space, push registraci, mailbox a ratchet (§13) a profil, X3DH, obálku a bezpečnostní číslo (`pairwise.json`, §15). Obě implementace musí projít všechny.
 
 ## 13. Data plane
 
@@ -275,20 +275,42 @@ Node je slepá schránka: ukládá jen ciphertext pod `mailbox_id` a nezná odes
 - Zpráva: `id` (16 B náhodných, generuje klient, b64u), `ts` (sekundy klienta, jen k řazení; musí být v rozmezí ±86 400 s od času nodu), `ct` (b64u, po dekódování nejvýše 32 KiB). `(mailbox_id, id)` identifikuje zprávu; opakovaný zápis téhož `id` nic nemění (idempotence).
 
 ### 13.2 Ratchet (klient ↔ klient)
-Jednosměrný symetrický řetěz na každý mailbox. HKDF je HKDF-SHA256 (RFC 5869), AEAD ChaCha20-Poly1305 (RFC 8439).
+Double Ratchet (Signal) nad dvěma jednosměrnými mailboxy: symetrický řetěz dává forward secrecy, DH krok post-compromise security. HKDF je HKDF-SHA256 (RFC 5869), AEAD ChaCha20-Poly1305 (RFC 8439), DH je X25519 (výstup samých nul se odmítne). Prázdná sůl znamená `HashLen` nul (RFC 5869 §2.2).
 
+**Odvození klíčů.**
 ```
-ck_0     = HKDF(ikm = ss, salt = "ancord/v1/ratchet", info = "chain" ‖ 0x00 ‖ dir, L = 32)
-mk_n     = HKDF(ikm = ck_n, salt = (prázdná), info = "ancord/v1/ratchet/msg", L = 44)   key = mk_n[0..32], nonce = mk_n[32..44]
-ck_{n+1} = HKDF(ikm = ck_n, salt = (prázdná), info = "ancord/v1/ratchet/chain", L = 32)
+rk_0         = HKDF(ikm = ss, salt = "ancord/v1/ratchet", info = "root", L = 32)
+KDF_RK(rk, d) = okm = HKDF(ikm = d, salt = rk, info = "ancord/v1/ratchet/root", L = 64)   → (rk' = okm[0..32], ck = okm[32..64])
+mk_n         = HKDF(ikm = ck_n, salt = (prázdná), info = "ancord/v1/ratchet/msg", L = 44)   key = mk_n[0..32], nonce = mk_n[32..44]
+ck_{n+1}     = HKDF(ikm = ck_n, salt = (prázdná), info = "ancord/v1/ratchet/chain", L = 32)
 ```
-Prázdná sůl znamená `HashLen` nul (RFC 5869 §2.2). Zpráva s pořadovým číslem `n` (u32, od 0):
 
+**Stav strany:** kořenový klíč `rk`, vlastní ratchet pár `DHs`, poslední ratchet klíč protistrany `DHr`, odesílací a přijímací řetěz `CKs`, `CKr`, čítače `Ns` (zpráv v odesílacím řetězu), `Nr` (v přijímacím), `PN` (délka předchozího odesílacího řetězu), `seq` (zpráv odeslaných celkem) a uložené klíče přeskočených zpráv. Odesílací mailbox je `mailbox_id(dir)` své role, přijímací protistrany (§13.1); mailboxy se kvůli ratchetu nemění.
+
+**Začátek.** Iniciátor zná první ratchet klíč `R` responderu (veřejný) a vygeneruje `DHs`:
 ```
-aad = "ancord/v1/msg" ‖ 0x00 ‖ mailbox_id(32 B) ‖ id(16 B) ‖ n_be_u32
-ct  = b64u( n_be_u32 ‖ ChaCha20-Poly1305(key, nonce, aad, plaintext) )      // šifrový text vč. 16 B tagu
+iniciátor:  rk, CKs = KDF_RK(rk_0, X25519(DHs, R));  DHr = R;  CKr = žádný
+responder:  rk = rk_0;  DHs = (tajný klíč k R);  DHr = žádný;  CKs = CKr = žádný
 ```
-Klíč i nonce jsou pro každé `n` jiné, takže se nonce nikdy neopakuje s týmž klíčem. Po použití se `ck_n` zahodí (forward secrecy v rámci řetězu). Příjemce drží `(ck, next_n, skipped)`: zpráva s `n = next_n` posune řetěz, `n > next_n` uloží klíče přeskočených zpráv (nejvýše `max_skip = 200` najednou, větší mezera se odmítne jako desync), `n < next_n` použije a smaže uložený přeskočený klíč, jinak se odmítne. Stav se mění až po úspěšném ověření tagu.
+`R` určuje způsob dohody: u X3DH (§15.4) je to podepsaný prekey `spk` příjemce, u ručně sdíleného tajemství (bez prekeys) `R = X25519 veřejný klíč k b = HKDF(ikm = ss, salt = "ancord/v1/ratchet", info = "initial-dh", L = 32)`. Responder tedy **nemůže psát, dokud nepřijme první zprávu iniciátora** (nemá odesílací řetěz); `seal` pak selže.
+
+**Zpráva** s hlavičkou `H = dh(32 B) ‖ pn_be_u32 ‖ n_be_u32 ‖ seq_be_u32` (44 B; `dh` je veřejný klíč `DHs` odesílatele, `pn = PN`, `n = Ns`):
+```
+aad = "ancord/v1/msg" ‖ 0x00 ‖ mailbox_id(32 B) ‖ id(16 B) ‖ H
+ct  = b64u( H ‖ ChaCha20-Poly1305(key, nonce, aad, plaintext) )      // šifrový text vč. 16 B tagu
+```
+Odesílatel vezme `mk` z `CKs`, posune `CKs`, zvýší `Ns` a `seq`. `seq` slouží jen k řazení zpráv u příjemce (`ts` má sekundovou přesnost a `n` se v každém řetězu vrací na nulu).
+
+**Příjem.** Pracuje se na kopii stavu, která se přijme až po ověření tagu, takže podvržená zpráva nic nezmění:
+1. Existuje uložený klíč pro `(dh, n)` → použije se a smaže.
+2. Jinak, je-li `dh ≠ DHr`: uloží se klíče zbývajících zpráv přijímacího řetězu do `pn` a provede se **DH krok**: `PN = Ns; Ns = 0; Nr = 0; DHr = dh; rk, CKr = KDF_RK(rk, X25519(DHs, DHr)); DHs = nový pár; rk, CKs = KDF_RK(rk, X25519(DHs, DHr))`.
+3. Je-li `n < Nr` (a klíč není uložený), zpráva se odmítne jako přehraná; jinak se uloží klíče zpráv `Nr..n` přeskočených v řetězu a použije se `mk_n`.
+
+Mezera větší než `max_skip = 200` zpráv v řetězu (`n − Nr`, resp. `pn − Nr`) se odmítne jako desync; uložených klíčů je nejvýše `max_skip` (nejstarší se zahazují). Po použití se klíč zprávy i `ck_n` zahodí (forward secrecy v rámci řetězu).
+
+**Post-compromise security.** Kdo získá celý stav strany v čase *t*, čte zprávy, dokud tato strana neudělá DH krok s novým párem, který útočník nezná: první odpověď protistrany, kterou přijme, a pak odpověď na ni. Od té chvíle `rk` závisí na DH výstupu, který útočník bez nového tajného klíče nespočítá, a konverzace se uzdraví. Platí to jen, když si strany píšou oba směry: jednostranný proud zpráv se nikdy neuzdraví.
+
+**Hlavička není skrytá.** Anchor ve zprávě vidí `dh`, `pn`, `n` a `seq` (náhodný klíč nesouvisí s identitou). Z toho pozná, kdy odesílatel poprvé přijal odpověď (změna `dh`), a počet zpráv v mailboxu. Šifrování hlavičky (Signal „header encryption“) by to skrylo, ale zvětšilo by stav; zatím se nedělá.
 
 ### 13.3 Zprávy klient → node
 Po `ready` (§8.1). Každý požadavek může nést `rid` (řetězec do 64 znaků), který odpověď zopakuje. Chyba má tvar `{"t":"error","rid":…,"code":"<kód>","reason":"<text>"}`; spojení po ní zůstává.
@@ -335,9 +357,9 @@ O jednu epochu napřed bývá odesílatel jen na několik vteřin, příjemce ad
 - Pod `quorum` nodů v adresáři se zápisy odmítají (`insufficient_nodes`), jiný degradovaný režim není.
 
 ### 13.6 Wake (push)
-- `push_id` je 52 znaků `[a-z2-7]` (§10.1). Odesílatel ho zná, protože ho odvodí ze sdíleného tajemství mailboxu; koordinující node ho přidá do `/n/put` všem anchorům. Neplatný tvar se odmítne (`bad_request`). `push_id` se neukládá.
+- `push_id` je 52 znaků `[a-z2-7]` (§10.1). Odesílatel ho zná: u mailboxu konverzace ho odvodí ze sdíleného tajemství, u schránky příjemce ho má z jeho profilu (§15.11). Koordinující node ho přidá do `/n/put` všem anchorům. Neplatný tvar se odmítne (`bad_request`). `push_id` se neukládá.
 - Anchor, který zprávu **nově uložil** (`stored`, ne `duplicate`, ne náhrobek) a dostal `push_id`, na pozadí pošle Workeru podepsaný `POST /wake` (§10.2) s `{push_id, mailbox_id}`. Odpověď Workeru se na zápis zprávy nijak nepromítá: selhání wake nikdy neshodí `send`.
-- Anchor koaleskuje i sám: pro stejný `push_id` pošle nejvýše jeden wake za `wake_min_interval_s` (výchozí 10 s). Worker koaleskuje znovu (per `push_id`) a limituje per node, takže až `r` souběžných wake od anchorů téže zprávy skončí nejvýš jednou jako push.
+- Anchor koaleskuje i sám: pro stejný `push_id` pošle nejvýše jeden wake za `wake_min_interval_s` (výchozí 10 s). Odpověď `no_token` se do koalescence nepočítá (push neodešel; příjemce mohl token právě zaregistrovat). Worker koaleskuje znovu (per `push_id`) a limituje per node, takže až `r` souběžných wake od anchorů téže zprávy skončí nejvýš jednou jako push.
 - Wake se posílá, jen když doručení online nevyšlo (§13.7): anchor nemá platnou presence, gateway nedostupná, nebo gateway odběratele nemá.
 
 ### 13.7 Presence a online doručení
@@ -403,3 +425,110 @@ Odpověď je vázaná na `n` požadavku, takže ji nelze přiřadit k jinému po
 - IP adresy, čas a hrubá velikost rámců (padding 256 B) jsou Cloudflare vidět; odesílatel a příjemce nejsou před nodem skryti kromě blinded `mailbox_id` (`THREAT_MODEL.md`).
 - Spojení nody ↔ Worker (heartbeat, `/wake`, `/route`) vede přes infrastrukturu Cloudflare z podstaty: Worker je Cloudflare. Vidí `push_id` a u `/wake` i `mailbox_id`; obsah zpráv nikdy.
 - Klient musí mít klíč Workeru připnutý mimo síť (`WORKER_PUBKEY`). Nody ho smějí poprvé stáhnout jen s výslovným `TRUST_WORKER_KEY_ON_FIRST_USE` (vývoj).
+
+## 15. Uživatelská identita, profil a funkce konverzace
+
+Funkční parita s prototypem `melo`: uživatel má veřejný klíč, najde protistranu podle něj, napíše jí bez předchozí výměny tajemství a vidí psaní a stav doručení. Node zůstává slepý: zná jen veřejný profil (to je smysl adresy) a blinded `mailbox_id`.
+
+### 15.1 Identita uživatele
+- `uk`: Ed25519 identitní klíč uživatele. **Adresa uživatele** je `pk = b64u(uk_pub)` (32 B).
+- `bk`: dlouhodobý X25519 klíč pro dohodu tajemství (identita pro DH).
+- `spk`: krátkodobý X25519 **podepsaný prekey**. Uživatel ho rotuje každých `SPK_ROTATE_S` = 7 dní. Tajný klíč starého prekey uchová `SPK_KEEP_S` = 21 dní (profil smí být 14 dní starý) a pak ho **nenávratně smaže**.
+- `otks`: až 32 **jednorázových** X25519 prekeys. Tajný klíč se smaže hned, jak ho použije první zpracovaná obálka.
+- `pushk`: trvalý náhodný Ed25519 **push klíč schránky** (§15.11). Jeho `push_id` je v profilu.
+- Klíče uživatele nemají nic společného s `ek` (efemerní klíč klienta pro ticket, §8) ani s klíči nodů.
+
+### 15.2 Profil
+Profil je `{"pk","bk","spk","otks":[…],"push_id","ts","pow","sig"}` (klíče a `sig` v b64u, `push_id` podle §10.1):
+- `payload = bk ‖ spk ‖ n(1 B) ‖ otks (n × 32 B) ‖ ts_be_u64 ‖ push_id (52 B ASCII)`,
+- `sig = Ed25519(uk, "ancord/v1/profile" ‖ 0x00 ‖ payload)`: pod podpisem je vše, co klient z profilu použije,
+- `pow`: hashcash (§4.2) s `nonce = sha256("ancord/v1/profile-pow" ‖ 0x00 ‖ payload)`, `pubkey = pk` a `bits = profile_pow_bits` (výchozí 10); chrání anchory před zaplavením profily,
+- `ts` je čas vytvoření a musí být v rozmezí ±86 400 s od času nodu, `n ≤ 32`, `push_id` má tvar podle §10.1 (jinak `bad_request`).
+
+Anchor drží vždy profil s nejvyšším `ts`; starší nebo shodný `ts` nic nemění. Záznam žije `profile_ttl_s` (výchozí 90 dní) od posledního přijetí. Uživatel profil znovu zveřejňuje po rotaci `spk`, po použití jednorázových prekeys a nejpozději jednou za 7 dní. Profil je veřejný z podstaty (kdo zná `pk`, ho získá), proto se ukládá v čitelné podobě.
+
+`profile_id = sha256("ancord/v1/profile-id" ‖ 0x00 ‖ pk)` (32 B). Anchory profilu se počítají podle §7 s `profile_id` místo `mailbox_id`.
+
+**Co musí klient ověřit.** Podpis profilu klíčem `pk`, shodu `pk` s adresou, kterou chtěl, a čerstvost: pro novou konverzaci odmítne profil starší než `PROFILE_MAX_AGE_S` = 14 dní, aby mu škodlivý anchor nemohl podstrčit starý prekey, jehož tajný klíč už unikl. Anchor profil podvrhnout nemůže, jen zadržet nebo vrátit starší. Že adresa patří opravdu dané osobě, se ověřuje mimo síť bezpečnostním číslem (§15.4).
+
+### 15.3 Zprávy klient → node
+| Požadavek | Úspěch | Význam |
+|---|---|---|
+| `{"t":"profile_put","pk","bk","spk","otks","push_id","ts","pow","sig"}` | `{"t":"profile_stored","acks":n}` | ověří podpis a `pow`, zapíše na `r` anchorů, hotovo po `quorum` potvrzeních |
+| `{"t":"profile_get","pk"}` | `{"t":"profile","pk","bk","spk","otks","push_id","ts","pow","sig"}` | přečte `r − quorum + 1` anchorů, vrátí profil s nejvyšším `ts`; `not_found`, když ho nemá žádný |
+
+Nové chybové kódy: `not_found`, `invalid_proof` (podpis nebo `pow` profilu neplatí).
+
+### 15.4 Zahájení konverzace (X3DH) a obálka
+Iniciátor (Alice) zná ověřený čerstvý profil příjemce (Bob). Alice vygeneruje efemerní X25519 klíč `ek`, z `otks` Bobova profilu vybere náhodně jeden `otk` (nejsou-li, vynechá se) a spočítá:
+```
+dh1 = X25519(bk_A, spk_B)    dh2 = X25519(ek, bk_B)    dh3 = X25519(ek, spk_B)    dh4 = X25519(ek, otk)   // jen s otk
+ss  = HKDF(salt = "ancord/v1/x3dh", ikm = 0xFF×32 ‖ dh1 ‖ dh2 ‖ dh3 [‖ dh4],
+           info = pk_A ‖ pk_B ‖ ek_pub ‖ spk_B ‖ [otk], L = 32)
+```
+Samé nuly z libovolného DH se odmítnou. Dál platí §13.1 a §13.2: `ss` určuje oba mailboxy a počáteční kořenový klíč ratchetu. První ratchet klíč responderu `R` (§13.2) je jeho podepsaný prekey `spk_B`, který Alice zná z profilu; Bob jeho tajný klíč zkopíruje do stavu ratchetu (z klíčů uživatele ho maže rotace podle §15.1) a v ratchetu ho nahradí při prvním DH kroku, tedy po přijetí první zprávy Alice. **Iniciátor** je ten, kdo poslal obálku; Alice smí začít psát ihned, zprávy čekají v mailboxu. Bob může psát až po přijetí její první zprávy (§13.2).
+
+**Schránka (inbox).** `inbox_id = sha256("ancord/v1/inbox" ‖ 0x00 ‖ pk)`. Je to běžný mailbox (§13), takže pro node vypadá jako kterýkoli jiný. Alice do ní pošle obálku obyčejným `send` s `push_id` z Bobova profilu, takže offline Boba vzbudí push (§13.6).
+
+**Obálka** (hodnota `ct`): `0x01 ‖ spk_id(8 B) ‖ ek_pub(32 B) ‖ AEAD`, kde `spk_id = sha256(spk_B)[0..8]`:
+```
+okm = HKDF(salt = "ancord/v1/envelope", ikm = X25519(ek, spk_B), info = inbox_id ‖ ek_pub ‖ spk_id, L = 44)
+AEAD = ChaCha20-Poly1305(key = okm[0..32], nonce = okm[32..44], aad = "ancord/v1/envelope" ‖ inbox_id ‖ ek_pub ‖ spk_id, plaintext = pk_A ‖ otk(32 B, nuly = žádný))
+```
+Anchor schránky vidí jen náhodný `ek_pub` a ciphertext; **adresu odesílatele ani jeho použitý `otk` nevidí**.
+
+**Příjemce** zpracuje obálku takto: najde `spk` podle `spk_id`, dešifruje, získá `pk_A` a `otk`, z anchorů si stáhne a ověří Alicin profil (§15.2), spočítá stejné `dh1..dh4` s opačnými rolemi, uloží nový stav klíčů **a teprve potom** obálku potvrdí (`ack`). Použitý `otk` se při uložení smaže. Poškozené nebo cizí obálky se potvrdí a zahodí (uvolní schránku); obálka, jejíž odesílatelův profil se nepodařilo najít, zůstane na později. Replay obálky je neškodný: `otk` už neexistuje, a obálka bez `otk` vytvoří stejné `ss`, které už příjemce zná (klient existující konverzaci nepřepíše).
+
+**Bezpečnostní číslo.** `sha256("ancord/v1/safety" ‖ 0x00 ‖ min(pk_A, pk_B) ‖ max(pk_A, pk_B))`, prvních 24 B jako 12 skupin po 2 B, každá `mod 100000` na 5 číslic. Obě strany musí vidět totéž; porovnává se mimo síť (osobně, telefonem). Bez toho by škodlivý anchor mohl při první komunikaci podstrčit cizí adresu.
+
+**Forward secrecy.**
+- Únik dlouhodobých klíčů (`uk`, `bk`) neprozradí zprávy, jejichž `spk` už příjemce smazal (po `SPK_KEEP_S`) ani jejichž `otk` už byl použit.
+- Zprávy navázané s `otk` jsou chráněny i proti úniku `spk` po použití `otk`.
+- Zprávy navázané bez `otk` (příjemci došly) jsou ohroženy únikem `spk` po dobu jeho života (nejvýše 21 dní), proto uživatel profil doplňuje.
+- Uvnitř konverzace dává forward secrecy jednosměrný řetěz klíčů a post-compromise security DH krok Double Ratchetu (§13.2).
+- **Meze:** Alicino první řetězec (zprávy před první odpovědí Boba) závisí na `spk_B` stejně jako X3DH; konverzace, v níž píše jen jedna strana, se neuzdraví; stav ratchetu je nutné chránit před zálohou a klonováním (znovupoužití `n`).
+
+### 15.5 Psaní (typing)
+`{"t":"typing","mailbox_id","on":bool}` → `{"t":"typing_ok"}`. Odesílatel signalizuje do mailboxu, do kterého píše (§13.1). Gateway pošle anchorům `/n/signal`; anchor s platnou presence (§13.7) předá signál `/n/typing` gateway příjemce, ta ho odběrateli pošle jako `{"t":"typing","mailbox_id","on"}`. Signál je nespolehlivý a nikdy se neukládá. Stejný stav se opakovaně nepřeposílá dřív než za `typing_min_interval_s` (výchozí 2 s). Obsah je blinded jako zbytek; příjemce nemá od nodu důkaz odesílatele (stejně jako u zpráv, ověřuje ho až ratchet).
+
+### 15.6 Stav doručení
+`{"t":"status","mailbox_id","ids":[…]}` (nejvýše 500) → `{"t":"status","mailbox_id","states":["pending"|"delivered"|"unknown",…]}` ve stejném pořadí jako `ids`. Čte `r − quorum + 1` anchorů; `delivered` vyhrává nad `pending`, `pending` nad `unknown`. `delivered` znamená, že příjemce zprávu potvrdil (`ack`); stav `unknown` mají zprávy po vypršení nebo ty, které nikdy nedorazily.
+
+### 15.7 Historie
+Server historii nedrží: po `ack` zbývá jen náhrobek a ratchet klíč zprávy hned zahodí, takže starý ciphertext už nikdo nedešifruje. Historie je proto lokální u klienta (CLI ji ukládá do souboru konverzace s právy 0600). To je záměr, ne chybějící funkce: delší držení ciphertextu na anchorech by prodlužovalo, co operátor vidí, a nic by nepřineslo.
+
+### 15.8 Dávkové odběry
+`subscribe` i `unsubscribe` smí místo `mailbox_id` nést `mailbox_ids` (pole, v součtu s existujícími odběry nejvýše 32). Odpověď má `mailbox_ids` a `anchors` jako pole potvrzených anchorů ve stejném pořadí; chyba kteréhokoli mailboxu zruší celý požadavek.
+
+### 15.9 Node ↔ node
+Přes zabezpečený kanál (§14.2), všechny podepsané jako `put`/`get` (§13.4):
+| Operace | Tělo | Odpověď | Kdo smí volat |
+|---|---|---|---|
+| `profile_put` | profil (§15.2) | `{"status":"stored"\|"duplicate"}` | člen adresáře; příjemce musí být anchorem `profile_id` |
+| `profile_get` | `{"pk"}` | `{"profile":{…}\|null}` (`null`, když ho anchor nemá) | člen adresáře; příjemce musí být anchorem `profile_id` |
+| `signal` | `{"mailbox_id","on"}` | `{"ok":true}` | člen adresáře; příjemce musí být anchorem `mailbox_id`; má-li presence, předá `typing` |
+| `typing` | `{"mailbox_id","on"}` | `{"delivered":bool}` | anchor mailboxu (jako `deliver`) |
+| `status` | `{"mailbox_id","ids":[…]}` | `{"states":[…]}` | člen adresáře; příjemce musí být anchorem `mailbox_id` |
+
+Příjemce `profile_put` profil znovu ověří (podpis, `pow`, `ts`); volající mu nevěří. Při handoffu (§13.5) se profily přesouvají jako zprávy, anchory podle `profile_id`.
+
+### 15.10 Adresa ke sdílení
+Adresa se předává mimo síť: QR kódem nebo zkopírováním textu (zpráva, e-mail, cokoli). Textový tvar je URI `ancord:<pk>` (`pk` je b64u, 43 znaků); QR kód obsahuje přesně tento řetězec. Klient přijme i holé `pk` bez předpony. Před použitím ověří, že `pk` je platný bod Ed25519. Překlep v adrese tak většinou skončí chybou, a pokud ne, profil pro takovou adresu neexistuje (`not_found`). Že adresa patří správné osobě, potvrdí bezpečnostní číslo (§15.4).
+
+### 15.11 Push klíče klienta
+Aby anchor mohl offline příjemce vzbudit (§13.6), musí odesílatel znát `push_id` mailboxu, do kterého píše, a příjemce pod ním mít u Workeru zaregistrovaný token (§10.1).
+- **Schránka.** `push_id` schránky je `push_id` klíče `pushk` (§15.1) a je podepsaný v profilu. Zná ho každý, kdo zná adresu, stejně jako schránku samotnou. Registrovat (a tím i mazat) token pod ním může jen držitel `pushk`.
+- **Mailbox konverzace.** `push_seed = HKDF(salt = "ancord/v1/push", ikm = ss, info = mailbox_id, L = 32)` je Ed25519 seed, z něj `push_pubkey` a `push_id` (§10.1). Příjemce registruje token pod `push_id` svého příchozího mailboxu, odesílatel k `send` přikládá `push_id` mailboxu, do kterého píše. Tento `push_id` zná jen dvojice, takže nikdo jiný nemůže příjemce budit zprávami do konverzace. Protistrana by mohla registraci přepsat, tím ale ovlivní jen push z vlastní konverzace.
+- Push klíče nemají nic společného s identitou (`uk`) ani s klíči ratchetu. Worker vidí, že několik `push_id` má stejný token (stejné zařízení); počet konverzací uživatele tak před ním skrytý není (`THREAT_MODEL.md`).
+
+### 15.12 Online klient
+Doporučený průběh klienta, který je připojený (CLI `ancord online`):
+1. `GET /route` (§8): Worker vrátí 3 nody a tickety. Klient se připojí na první, který ho přijme (§8.1, §14.1). Worker se dál doručování neúčastní.
+2. Je-li potřeba (rotace `spk`, použité `otks`, nejpozději po 7 dnech), klient zveřejní profil (§15.2). CLI ho zveřejní při každém připojení.
+3. `subscribe` schránky a příchozích mailboxů všech konverzací (§15.8, nejvýše 32 na spojení). Gateway spočítá anchory a oznámí jim presence. Pak `fetch` toho, co čekalo.
+4. Nová zpráva ve schránce: klient obálku zpracuje (§15.4), uloží klíče a konverzaci, potvrdí obálku, přihlásí odběr nového mailboxu a znovu zveřejní profil (spotřebovaný `otk`).
+5. Zprávy konverzací anchor přeposílá přes gateway (§13.7). Klient je dešifruje, uloží stav ratchetu a teprve pak potvrdí (`ack`).
+6. Po odpojení gateway presence zruší, nebo sama vyprší po `presence_ttl_s`. Další zprávy zůstávají na anchorech a anchor pošle wake (§13.6). Push probudí aplikaci, ta se připojí znovu (krok 1) a zprávy vyzvedne.
+7. Při výpadku gateway se klient připojí znovu s novým `/route`. Presence na starém nodu vyprší sama.
+
+Token registruje klient přímo u Workeru (§10.1) pro schránku a pro příchozí mailbox každé konverzace, tedy i nově založené.

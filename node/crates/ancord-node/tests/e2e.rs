@@ -10,7 +10,12 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ancord_cli::{admit, admit_unchecked, connect_any, fetch_route, next_pushed, receive, rpc, subscribe, transmit, transmit_with_push, CliError, Role, Route, RouteNode, Session};
+use ancord_cli::online::{Online, OnlineEvent, Persist};
+use ancord_cli::{
+    address, parse_address, register_push, ack_inbox, admit, admit_unchecked, process_inbox, start_conversation, connect_any, fetch_route, lookup_profile, message_status, next_event, next_pushed, publish_profile, receive, rpc, send_typing, subscribe,
+    subscribe_many, transmit, transmit_with_push, CliError, Event, Role, Route, RouteNode, Session,
+};
+use ancord_node::user::UserKeys;
 use ancord_node::canonical::canonical_bytes;
 use ancord_node::encoding::{b64u_decode_array, b64u_encode, base32_encode};
 use ancord_node::identity::{hostname_of, Identity};
@@ -28,6 +33,34 @@ use tokio::process::{Child, Command};
 use tokio_tungstenite::tungstenite::Message;
 
 const ZONE: &str = "melonet.cz";
+
+/// Online klient v testu nic neukládá.
+struct NoDisk;
+
+impl Persist for NoDisk {
+    fn save_keys(&mut self, _: &UserKeys) -> Result<(), CliError> {
+        Ok(())
+    }
+    fn save_conversation(&mut self, _: usize, _: &Session) -> Result<(), CliError> {
+        Ok(())
+    }
+    fn add_conversation(&mut self, _: usize, _: &Session) -> Result<(), CliError> {
+        Ok(())
+    }
+}
+
+/// Další zpráva online klienta (signály psaní a prázdné rámce přeskočí).
+async fn next_online_message(online: &mut Online, ws: &mut ancord_cli::NodeSocket) -> Vec<u8> {
+    let until = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < until {
+        for e in online.next(ws, &mut NoDisk, Duration::from_secs(1)).await.unwrap().unwrap_or_default() {
+            if let OnlineEvent::Message { text, .. } = e {
+                return text;
+            }
+        }
+    }
+    panic!("no message for the online client");
+}
 const ADMIN: &str = "e2e-admin";
 
 fn worker_dir() -> PathBuf {
@@ -278,8 +311,8 @@ async fn three_nodes_register_challenge_route_and_admit() {
 
     // B3: Alice a Bob si píšou přes různé nody; node vidí jen ciphertext
     let secret = [0x5a; 32];
-    let mut alice = Session::new(secret, Role::Initiator);
-    let mut bob = Session::new(secret, Role::Responder);
+    let mut alice = Session::new(secret, Role::Initiator).unwrap();
+    let mut bob = Session::new(secret, Role::Responder).unwrap();
     let (alice_ek, bob_ek) = (SigningKey::generate(&mut OsRng), SigningKey::generate(&mut OsRng));
     let alice_route = fetch_route(&http, &base, &alice_ek.verifying_key().to_bytes()).await.unwrap();
     let bob_route = fetch_route(&http, &base, &bob_ek.verifying_key().to_bytes()).await.unwrap();
@@ -327,7 +360,7 @@ async fn three_nodes_register_challenge_route_and_admit() {
     assert_eq!(receive(&mut bob_ws, &mut bob).await.unwrap().messages, vec![b"vzbud se".to_vec()]);
 
     // Bob nemůže číst z mailboxu, který patří jemu samému jako odesílateli
-    let mut eve = Session::new([0x11; 32], Role::Responder);
+    let mut eve = Session::new([0x11; 32], Role::Responder).unwrap();
     assert!(receive(&mut bob_ws, &mut eve).await.unwrap().messages.is_empty());
 
     // B5: Bob je online (odběr u své gateway), Alice píše přes jiný node: anchor zprávu sám přepošle Bobovi
@@ -338,6 +371,92 @@ async fn three_nodes_register_challenge_route_and_admit() {
     assert_eq!(pushed, Some(b"online doruceni".to_vec()), "anchor must push the message to the recipient's gateway");
     assert!(receive(&mut bob_ws, &mut bob).await.unwrap().messages.is_empty(), "pushed and acked message must not come back");
     rpc(&mut bob_ws, json!({"t": "unsubscribe", "mailbox_id": b64u_encode(&bob.inbox())})).await.unwrap();
+
+    // B6: uživatelé s veřejnými klíči: profil, vyhledání podle adresy, dohoda tajemství, typing, stav doručení, historie
+    let (ua, ub) = (UserKeys::generate(unix_now()), UserKeys::generate(unix_now()));
+    assert!(publish_profile(&mut alice_ws, &ua, 10).await.unwrap() >= 2);
+    assert!(publish_profile(&mut bob_ws, &ub, 10).await.unwrap() >= 2);
+    // Alice zahájí konverzaci jen podle Bobovy adresy, Bob obálku vyzvedne ze své schránky
+    let mut sa = start_conversation(&mut alice_ws, &ua, &ub.pk()).await.unwrap();
+    let mut ub = ub;
+    let batch = process_inbox(&mut bob_ws, &mut ub).await.unwrap();
+    assert_eq!((batch.accepted.len(), batch.postponed), (1, 0));
+    ack_inbox(&mut bob_ws, &ub, &batch.done).await.unwrap();
+    let mut sb = batch.accepted.into_iter().next().unwrap().session;
+    assert_eq!(sa.secret, sb.secret);
+    assert_ne!(sa.role, sb.role);
+    assert!(process_inbox(&mut bob_ws, &mut ub).await.unwrap().accepted.is_empty(), "acked envelopes must not come back");
+    let unknown = lookup_profile(&mut alice_ws, &UserKeys::generate(unix_now()).pk()).await;
+    assert!(matches!(unknown, Err(CliError::Node { ref code, .. }) if code == "not_found"), "{unknown:?}");
+    let mut lazy = ua.profile(unix_now(), 0).to_json();
+    lazy["t"] = json!("profile_put");
+    let bad_pow = rpc(&mut alice_ws, lazy).await;
+    assert!(matches!(bad_pow, Err(CliError::Node { ref code, .. }) if code == "invalid_proof"), "{bad_pow:?}");
+
+    subscribe_many(&mut bob_ws, &[&sb]).await.unwrap();
+    send_typing(&mut alice_ws, &sa, true).await.unwrap();
+    let event = next_event(&mut bob_ws, &mut sb, Duration::from_secs(10)).await.unwrap();
+    assert_eq!(event, Some(Event::Typing(true)));
+    let hello = sa.prepare(b"ahoj Bobe").unwrap();
+    transmit(&mut alice_ws, &hello).await.unwrap();
+    let event = next_event(&mut bob_ws, &mut sb, Duration::from_secs(10)).await.unwrap();
+    assert_eq!(event, Some(Event::Message(b"ahoj Bobe".to_vec())));
+    let until = Instant::now() + Duration::from_secs(10);
+    let states = loop {
+        let s = message_status(&mut alice_ws, &sa, &[hello.id]).await.unwrap();
+        if s == ["delivered"] || Instant::now() > until {
+            break s;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    assert_eq!(states, ["delivered"]);
+    assert_eq!((sa.history.len(), sa.history[0].outgoing), (1, true));
+    assert_eq!((sb.history.len(), sb.history[0].outgoing), (1, false));
+    rpc(&mut bob_ws, json!({"t": "unsubscribe", "mailbox_ids": [b64u_encode(&sb.inbox())]})).await.unwrap();
+
+    // B8: celý tok podle adresy. Dave je offline s push tokenem; Carol ho najde podle adresy z QR kódu nebo textu.
+    let pushes = || std::fs::read_to_string(logs.join("wrangler.log")).unwrap_or_default().matches("push_logged").count();
+    let (carol, dave) = (UserKeys::generate(unix_now()), UserKeys::generate(unix_now()));
+    let dave_ek = SigningKey::generate(&mut OsRng);
+    let route = fetch_route(&http, &base, &dave_ek.verifying_key().to_bytes()).await.unwrap();
+    let (_, mut dave_ws) = connect_any(&route, &dave_ek, &worker_key, &url_for).await.unwrap();
+    assert!(publish_profile(&mut dave_ws, &dave, 10).await.unwrap() >= 2);
+    let _ = dave_ws.close().await;
+    register_push(&http, &base, dave.push_key(), "fcm", "dave-device", unix_now()).await.unwrap();
+    assert!(publish_profile(&mut alice_ws, &carol, 10).await.unwrap() >= 2);
+    let shared = address(&dave);
+    assert!(shared.starts_with("ancord:"));
+    let before = pushes();
+    let mut sc = start_conversation(&mut alice_ws, &carol, &parse_address(&shared).unwrap()).await.unwrap();
+    eventually("first contact wakes the offline recipient", Duration::from_secs(60), || async { (pushes() > before).then_some(()) }).await;
+    transmit(&mut alice_ws, &sc.prepare(b"ahoj Dave").unwrap()).await.unwrap();
+
+    // Dave se připojí: obálku přijme sám, odebírá novou konverzaci a vyzvedne, co čekalo
+    let route = fetch_route(&http, &base, &dave_ek.verifying_key().to_bytes()).await.unwrap();
+    let (_, mut dave_ws) = connect_any(&route, &dave_ek, &worker_key, &url_for).await.unwrap();
+    let mut online = Online::new(dave, Vec::new(), 10);
+    let (events, skipped) = online.attach(&mut dave_ws, &mut NoDisk).await.unwrap();
+    assert!(skipped.is_empty());
+    assert_eq!(events, vec![OnlineEvent::Contact { index: 0, watched: true }, OnlineEvent::Message { index: 0, text: b"ahoj Dave".to_vec() }]);
+    assert_eq!(online.conversations[0].peer.as_deref(), Some(b64u_encode(&carol.pk()).as_str()));
+    register_push(&http, &base, &online.conversations[0].inbox_push_key(), "fcm", "dave-device", unix_now()).await.unwrap();
+    // online: zprávu anchor přepošle přes gateway, odpověď jde opačným směrem
+    transmit(&mut alice_ws, &sc.prepare(b"jsi online?").unwrap()).await.unwrap();
+    assert_eq!(next_online_message(&mut online, &mut dave_ws).await, b"jsi online?");
+    online.send(&mut dave_ws, &mut NoDisk, 0, b"ano").await.unwrap();
+    assert_eq!(receive(&mut alice_ws, &mut sc).await.unwrap().messages, vec![b"ano".to_vec()]);
+
+    // Dave se odpojí: presence zanikne a další zpráva ho vzbudí pushem; po připojení si ji vyzvedne
+    let _ = dave_ws.close().await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let before = pushes();
+    transmit(&mut alice_ws, &sc.prepare(b"jsi tam?").unwrap()).await.unwrap();
+    eventually("message for an offline user wakes them", Duration::from_secs(60), || async { (pushes() > before).then_some(()) }).await;
+    let route = fetch_route(&http, &base, &dave_ek.verifying_key().to_bytes()).await.unwrap();
+    let (_, mut dave_ws) = connect_any(&route, &dave_ek, &worker_key, &url_for).await.unwrap();
+    let (events, _) = online.attach(&mut dave_ws, &mut NoDisk).await.unwrap();
+    assert_eq!(events, vec![OnlineEvent::Message { index: 0, text: b"jsi tam?".to_vec() }]);
+    let _ = dave_ws.close().await;
 
     // zpráva, která přežije restart nodu (embedded úložiště) a čeká na Boba
     let pending = alice.prepare(b"pocka na restart").unwrap();

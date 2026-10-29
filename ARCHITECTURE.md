@@ -2,7 +2,7 @@
 
 Decentralizovaná síť pro E2E šifrované zprávy. Nody provozuje kdokoli, nikdo jim nevěří, jejich zdroje se měří. Cloudflare slouží jako *control plane*: registrace, verifikace nodů, load balancing a push notifikace. Zprávy a spojení klientů jdou přímo na nody.
 
-> Stav: návrh. Žádný kód v2 zatím neexistuje. Body označené **[ověřit]** je potřeba potvrdit prototypem, než se spec zamkne.
+> Stav: fáze A a B jsou implementované a lokálně otestované (viz 12.4), nic není nasazené. Body označené **[ověřit]** se potvrdí ve fázi C na reálné infrastruktuře.
 
 ## 1. Cíle a hranice
 
@@ -158,6 +158,22 @@ Důsledky:
 - Anchor ví z presence, na kterém nodu je mailbox, ale ne kdo za ním stojí (`mailbox_id` je blinded).
 - Rozdíl oproti prototypu: tam se používal ještě záložní okruh 5 anchorů a presence v DB. Tady je presence v paměti a kvorum je řízeno adresářem epochy, žádný záložní okruh navíc není, dokud se neukáže potřeba.
 
+### 6.4 Identita uživatele a funkce konverzace
+
+Prototyp `melo` měl uživatele s veřejným klíčem, vyhledání profilu, psaní a stav doručení. Ve v2 to platí také (`spec/PROTOCOL.md` §15):
+- **Adresa je veřejný klíč** (Ed25519). K němu patří podepsaný profil s X25519 klíčem pro dohodu tajemství. Profil leží na třech anchorech podle `sha256(pk)`, stejně jako mailboxy (HRW, kvorum), a hledá se podle `pk`.
+- **Napsat komukoli lze bez předchozí výměny tajemství**: iniciátor provede X3DH s podepsaným rotujícím prekey a jednorázovým prekey příjemce a pošle mu šifrovanou obálku do jeho schránky (`inbox_id` z adresy). Anchor v obálce nevidí odesílatele. Příjemce ji zpracuje, tajné prekeys po použití resp. rotaci smaže a obě strany pak používají mailboxy a Double Ratchet (podepsaný prekey příjemce je jeho první ratchet klíč). Únik dlouhodobých klíčů tak neprozradí zprávy, jejichž prekeys už neexistují (forward secrecy). Adresu protistrany lze ověřit mimo síť bezpečnostním číslem.
+- **Typing** je nespolehlivý efemérní signál přes presence (gateway → anchor → gateway příjemce), nikdy se neukládá.
+- **Stav doručení** zjistí odesílatel dotazem na anchory (`pending`/`delivered`/`unknown`).
+- **Historie** je lokální u klienta. Server po `ack` drží jen náhrobek a klíč zprávy se v ratchetu zahazuje, takže starý ciphertext je nedešifrovatelný; držet ho déle by zvětšovalo, co operátor vidí, a nic by nepřineslo.
+- Dávkové odběry (`mailbox_ids`) jako v prototypu.
+- Uživatel je pro node pořád anonymní (ticket, žádné přihlášení); omezení zahlcení je per spojení a hashcash u profilu, ne per uživatel.
+- **Sdílení adresy**: `ancord:<pk>` jako text nebo QR kód (spec §15.10). Kdo adresu dostane, napíše bez jakékoli další výměny.
+- **Push**: `push_id` schránky je v podepsaném profilu, takže i úplně první zprávu (obálku) anchor může doručit pushem. `push_id` mailboxu konverzace se odvodí ze sdíleného tajemství, zná ho jen dvojice (spec §15.11).
+- **Online klient** (spec §15.12): `/route` → připojení na gateway → zveřejnění profilu → `subscribe` schránky a všech konverzací (presence na anchorech) → zprávy chodí živě. Po odpojení presence zanikne a anchory budí pushem. CLI: `ancord online`.
+
+Cena: operátor anchoru profilu vidí, že adresa `pk` existuje a kdy aktualizovala profil. Profil je veřejný z podstaty. Neví, s kým adresa mluví (mailboxy jsou blinded, obálka skrývá odesílatele). Uživatel musí profil zveřejňovat aspoň jednou za týden (rotace prekey). Post-compromise security zajišťuje Double Ratchet (§13.2 specifikace; bod 11).
+
 ## 7. Cloudflare zdroje a cena
 
 | Služba | Použití |
@@ -209,6 +225,7 @@ Důsledky:
 8. ~~Konfliktní model mailboxu při zápisu s kvorem 2~~ vyřešeno v B3: zápis je idempotentní podle `(mailbox_id, id)`, doručení je náhrobek a „doručeno“ vyhrává, pořadí je podle `(ts, id)`, čtení sjednocuje odpovědi `r − quorum + 1` anchorů (`spec/PROTOCOL.md` §13).
 9. Perzistence klíče a dat nodu na Flux (instance se může přesunout na jiný stroj; ztráta klíče znamená nový `node_id` a ztrátu anchorů).
 10. Velikost sítě nad stovky nodů: shardování registru (DO) a frekvence epoch. Pro 3–20 nodů se neřeší.
+11. ~~Post-compromise security~~ vyřešeno: Double Ratchet s DH krokem (`spec/PROTOCOL.md` §13.2, klient `node/crates/ancord-node/src/ratchet.rs`). Zbývá šifrování hlavičky ratchetu (anchor vidí `dh`, `pn`, `n`, `seq`) a uzdravení jednostranných konverzací (prázdná „keepalive“ zpráva). Dále spam do schránky (`inbox`) a ztráta klíčů zařízení (záloha vs. forward secrecy).
 
 **Blokující body** jsou 1, 2 a 5. Ověřit je prototypem (viz fáze 0) dřív, než vznikne další kód.
 
@@ -298,7 +315,11 @@ Vývoj běží na firemní zóně **`melonet.cz`** (sdílená zóna s existujíc
 
 **Stav (fáze A):** A1–A5 jsou implementovány v `worker/` a splňují kritéria přijetí v testech (vitest + Miniflare, `npm test` v `worker/`), včetně sdílených vektorů v `spec/test-vectors/`. Nic není nasazeno.
 
-**Stav (fáze B):** B1 až B4 jsou implementovány v `node/` a splňují kritéria přijetí v integračním testu `node/crates/ancord-node/tests/e2e.rs` (tři nody proti lokálně spuštěnému Workeru v `wrangler dev`, mock Cloudflare, bez tunelu), v `tests/dataplane.rs` (kvorum, výpadky, autorizace node↔node, handoff, wake proti falešnému Workeru, bez skutečného Workeru) a ve sdílených vektorech (včetně HRW a ratchetu). Data plane je v `spec/PROTOCOL.md` §13, wake v §13.6. Klient zatím mailbox čte dotazem `fetch`; průběžné doručování online odběrateli zatím není, proto anchor wake posílá vždy (§13.6). Odvození push klíče z mailbox tajemství na straně klienta je mimo rozsah (mobilní klient), CLI jen umí poslat zadané `push_id`. Nic není nasazeno.
+**Stav (fáze B):** B1 až B4 jsou implementovány v `node/` a splňují kritéria přijetí v integračním testu `node/crates/ancord-node/tests/e2e.rs` (tři nody proti lokálně spuštěnému Workeru v `wrangler dev`, mock Cloudflare, bez tunelu), v `tests/dataplane.rs` (kvorum, výpadky, autorizace node↔node, handoff, wake proti falešnému Workeru, bez skutečného Workeru) a ve sdílených vektorech (včetně HRW a ratchetu). Data plane je v `spec/PROTOCOL.md` §13, wake v §13.6. Presence a průběžné doručování online odběrateli jsou hotové (B5, §13.7), wake se posílá jen tehdy, když doručení online nevyjde. Nic není nasazeno.
+
+**Stav (parita s `melo`, §6.4):** identita uživatele, profily na anchorech, X3DH s obálkou ve schránce, typing, stav doručení, dávkové odběry a lokální historie jsou implementované v `node/` (včetně CLI) a otestované v `tests/dataplane.rs`, `tests/e2e.rs` a ve vektoru `pairwise.json`. Nic není nasazeno.
+
+**Stav (uživatelský tok před fází C):** adresa `ancord:<pk>` (text, QR), push klíče schránky (v profilu) a konverzací (ze sdíleného tajemství, vektor `pairwise.json`), registrace tokenu z CLI (`push-register`) a online klient (`ancord online`: jedno spojení, schránka i konverzace, automatické přijetí kontaktů, znovupřipojení s novým `/route`). E2E test ověřuje celý tok: první kontakt vzbudí offline příjemce, po připojení přijme kontakt a zprávy živě, po odpojení ho další zpráva vzbudí znovu. Soubory klíčů a konverzací jsou zamčené, aby dva procesy nepoužily stejný klíč ratchetu dvakrát. Mobilní klient (skenování QR, FCM/APNs token) zůstává mimo rozsah.
 
 **Deploy a DNS se zatím neřeší.** Nejdřív se napíše a lokálně otestuje kód, nasazení na Cloudflare a Docker prostředí přijdou až ve fázi C. Fáze A a B nic nevytvářejí v Cloudflare a nepotřebují DNS ani `.env`.
 

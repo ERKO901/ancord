@@ -207,3 +207,75 @@ pub fn after_store(st: &Arc<NodeState>, mailbox: [u8; 32], id: [u8; 16], ts: u64
         }
     });
 }
+
+// --- typing (spec §15.5) ---------------------------------------------------------------------------------------
+
+/// Role uzlu při koalescenci signálu: anchor přeposílá, gateway doručuje (mohou být tentýž node).
+const ROLE_ANCHOR: u8 = 0;
+const ROLE_GATEWAY: u8 = 1;
+/// Strop počtu pamatovaných mailboxů pro koalescenci.
+const MAX_TYPING_STATE: usize = 100_000;
+
+/// `true`, když se má signál předat dál; stejný stav téhož mailboxu se do `typing_min_interval_s` zahodí.
+fn coalesce(st: &NodeState, mailbox: &[u8; 32], role: u8, on: bool) -> bool {
+    let now = unix_now();
+    let Ok(mut last) = st.typing_last.lock() else { return false };
+    if last.len() >= MAX_TYPING_STATE {
+        last.retain(|_, (_, t)| now.saturating_sub(*t) < 60);
+    }
+    match last.get(&(*mailbox, role)) {
+        Some((prev, t)) if *prev == on && now.saturating_sub(*t) < st.cfg.typing_min_interval_s => false,
+        _ => {
+            last.insert((*mailbox, role), (on, now));
+            true
+        }
+    }
+}
+
+/// Gateway: předá signál psaní připojeným odběratelům. Opakovaný stejný signál (od dalších anchorů) se zahodí.
+pub fn deliver_typing(st: &NodeState, mailbox: &[u8; 32], on: bool) -> bool {
+    if !coalesce(st, mailbox, ROLE_GATEWAY, on) {
+        return true;
+    }
+    let Ok(mut subs) = st.subscribers.lock() else { return false };
+    let Some(entry) = subs.get_mut(mailbox) else { return false };
+    entry.conns.retain(|s| !s.tx.is_closed());
+    let msg = json!({"t": "typing", "mailbox_id": b64u_encode(mailbox), "on": on});
+    let mut sent = false;
+    for s in &entry.conns {
+        sent |= s.tx.try_send(msg.clone()).is_ok();
+    }
+    sent
+}
+
+/// Anchor: přepošle signál gateway, u které je mailbox online. Bez presence signál zanikne.
+pub async fn relay_typing(st: &Arc<NodeState>, mailbox: &[u8; 32], on: bool) {
+    if !coalesce(st, mailbox, ROLE_ANCHOR, on) {
+        return;
+    }
+    let Some(entry) = current_presence(st, mailbox) else { return };
+    if entry.gateway == st.identity.node_id() {
+        deliver_typing(st, mailbox, on);
+        return;
+    }
+    let Some(node) = data::find_node(st, &entry.gateway) else { return };
+    let body = json!({"mailbox_id": b64u_encode(mailbox), "on": on});
+    if let Ok(answer) = peer_post(st, &node, "/n/typing", &body).await {
+        if !answer["delivered"].as_bool().unwrap_or(false) {
+            set_presence(st, *mailbox, &entry.gateway, 0);
+        }
+    }
+}
+
+/// Gateway odesílatele: pošle signál anchorům mailboxu. Nečeká na ně a nikdy nehlásí chybu doručení.
+pub fn send_typing(st: &Arc<NodeState>, mailbox: [u8; 32], on: bool) -> Result<(), data::DataError> {
+    let plan = data::plan(st, &mailbox)?;
+    let _ = fan_out(st, plan.nodes, move |st, node, is_self| async move {
+        if is_self {
+            relay_typing(&st, &mailbox, on).await;
+            return Ok(());
+        }
+        peer_post(&st, &node, "/n/signal", &json!({"mailbox_id": b64u_encode(&mailbox), "on": on})).await.map(|_| ())
+    });
+    Ok(())
+}

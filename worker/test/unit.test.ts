@@ -6,6 +6,9 @@ import { blake3, leadingZeroBits, signerFromSeed, verifySig, DOMAIN } from "../s
 import { ipPrefix } from "../src/http";
 import { anchorsFor } from "../src/hrw";
 import { loadConfig, withOverrides } from "../src/config";
+import { createCloudflareClient } from "../src/cloudflare";
+import { createPushSender } from "../src/push/senders";
+import type { Env } from "../src/env";
 import { scoreOf } from "../src/registry/scoring";
 import type { NodeRow } from "../src/registry/store";
 import { FAST, bringUp, exports, newNode, registryStub, seedActive, setup, sqlOf, tick, withRegistry } from "./support/helpers";
@@ -169,6 +172,17 @@ describe("skóre nodu", () => {
     expect(scoreOf(open, row({ genesis: 1, uptime_s: 0, ch_ok: 0 }), now).trust).toBe(1);
     // velká uptime bez ověřených challenge nestačí
     expect(scoreOf(open, row({ uptime_s: open.probation.durationS * 2, ch_ok: 0 }), now).trust).toBeCloseTo(open.probation.floor, 6);
+  });
+});
+
+describe("produkční konfigurace", () => {
+  it("mimo profil dev odmítne mock Cloudflare a logování push", () => {
+    const prod = { ...env, PROFILE: "prod", CLOUDFLARE_MODE: "mock", PUSH_MODE: "log" } as Env;
+    expect(() => createCloudflareClient(prod)).toThrow(/CLOUDFLARE_MODE/);
+    expect(() => createPushSender(prod)).toThrow(/PUSH_MODE/);
+    const dev = { ...env, PROFILE: "dev", CLOUDFLARE_MODE: "mock", PUSH_MODE: "log" } as Env;
+    expect(() => createCloudflareClient(dev)).not.toThrow();
+    expect(() => createPushSender(dev)).not.toThrow();
   });
 });
 

@@ -3,12 +3,18 @@
 use std::fmt::Display;
 use std::path::Path;
 
-use redb::{Database, ReadableTable, TableDefinition};
+use redb::{Database, ReadableTable, ReadableTableMetadata, TableDefinition};
+
+use crate::wake::PUSH_ID_LEN;
 
 /// Klíč `mailbox_id(32) ‖ id(16)`, hodnota `state(1) ‖ ts_be_u64 ‖ exp_be_u64 ‖ ct`.
 const MESSAGES: TableDefinition<&[u8], &[u8]> = TableDefinition::new("messages");
 /// Počet nedoručených zpráv v mailboxu (pro strop), klíč `mailbox_id`.
 const PENDING: TableDefinition<&[u8], u64> = TableDefinition::new("pending");
+
+/// Veřejné profily uživatelů, klíč `pk(32)`, hodnota `ts ‖ exp ‖ pow` (každé u64 BE) `‖ bk(32) ‖ spk(32) ‖ sig(64) ‖ n(1) ‖ n × otk(32)`.
+const PROFILES: TableDefinition<&[u8], &[u8]> = TableDefinition::new("profiles");
+const PROFILE_FIXED_LEN: usize = 24 + 32 + 32 + 64 + PUSH_ID_LEN + 1;
 
 const KEY_LEN: usize = 48;
 const HEADER_LEN: usize = 17;
@@ -35,6 +41,47 @@ pub struct Record {
     pub exp: u64,
     /// `None` = doručeno (náhrobek).
     pub ct: Option<Vec<u8>>,
+}
+
+/// Veřejný profil uživatele (`spec/PROTOCOL.md` §15.2) a čas, kdy ho node smaže.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileRecord {
+    pub pk: [u8; 32],
+    pub bk: [u8; 32],
+    pub spk: [u8; 32],
+    pub otks: Vec<[u8; 32]>,
+    pub push_id: String,
+    pub ts: u64,
+    pub pow: u64,
+    pub sig: [u8; 64],
+    pub exp: u64,
+}
+
+/// Stav zprávy z pohledu jednoho anchoru (`spec/PROTOCOL.md` §15.6). Větší hodnota vyhrává při sjednocení.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MsgState {
+    Unknown,
+    Pending,
+    Delivered,
+}
+
+impl MsgState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Pending => "pending",
+            Self::Delivered => "delivered",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "unknown" => Self::Unknown,
+            "pending" => Self::Pending,
+            "delivered" => Self::Delivered,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +127,44 @@ fn decode(k: &[u8], v: &[u8]) -> Option<Record> {
     })
 }
 
+fn encode_profile(p: &ProfileRecord) -> Vec<u8> {
+    let mut v = Vec::with_capacity(PROFILE_FIXED_LEN + 32 * p.otks.len());
+    v.extend_from_slice(&p.ts.to_be_bytes());
+    v.extend_from_slice(&p.exp.to_be_bytes());
+    v.extend_from_slice(&p.pow.to_be_bytes());
+    v.extend_from_slice(&p.bk);
+    v.extend_from_slice(&p.spk);
+    v.extend_from_slice(&p.sig);
+    v.extend_from_slice(p.push_id.as_bytes());
+    v.push(u8::try_from(p.otks.len()).unwrap_or(u8::MAX));
+    for otk in &p.otks {
+        v.extend_from_slice(otk);
+    }
+    v
+}
+
+fn decode_profile(k: &[u8], v: &[u8]) -> Option<ProfileRecord> {
+    if k.len() != 32 || v.len() < PROFILE_FIXED_LEN {
+        return None;
+    }
+    let count = usize::from(v[PROFILE_FIXED_LEN - 1]);
+    if v.len() != PROFILE_FIXED_LEN + 32 * count {
+        return None;
+    }
+    let otks: Vec<[u8; 32]> = v[PROFILE_FIXED_LEN..].as_chunks::<32>().0.to_vec();
+    Some(ProfileRecord {
+        pk: k.try_into().ok()?,
+        ts: u64::from_be_bytes(v[0..8].try_into().ok()?),
+        exp: u64::from_be_bytes(v[8..16].try_into().ok()?),
+        pow: u64::from_be_bytes(v[16..24].try_into().ok()?),
+        bk: v[24..56].try_into().ok()?,
+        spk: v[56..88].try_into().ok()?,
+        sig: v[88..152].try_into().ok()?,
+        push_id: String::from_utf8(v[152..152 + PUSH_ID_LEN].to_vec()).ok()?,
+        otks,
+    })
+}
+
 fn mailbox_range(mailbox_id: &[u8; 32]) -> (Vec<u8>, Vec<u8>) {
     let mut lo = mailbox_id.to_vec();
     lo.extend_from_slice(&[0; 16]);
@@ -106,6 +191,7 @@ impl Store {
         let tx = db.begin_write().map_err(io)?;
         tx.open_table(MESSAGES).map_err(io)?;
         tx.open_table(PENDING).map_err(io)?;
+        tx.open_table(PROFILES).map_err(io)?;
         tx.commit().map_err(io)?;
         Ok(Self { db })
     }
@@ -177,6 +263,84 @@ impl Store {
         }
         tx.commit().map_err(io)?;
         Ok(changed)
+    }
+
+    /// Stav zpráv (`ids`) ve stejném pořadí. Vypršené záznamy se hlásí jako neznámé.
+    pub fn states(&self, mailbox_id: &[u8; 32], ids: &[[u8; 16]], now: u64) -> Result<Vec<MsgState>, StoreError> {
+        let tx = self.db.begin_read().map_err(io)?;
+        let msgs = tx.open_table(MESSAGES).map_err(io)?;
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            let rec = msgs.get(key(mailbox_id, id).as_slice()).map_err(io)?.and_then(|v| decode(&key(mailbox_id, id), v.value()));
+            out.push(match rec {
+                Some(r) if r.exp > now => {
+                    if r.ct.is_some() {
+                        MsgState::Pending
+                    } else {
+                        MsgState::Delivered
+                    }
+                }
+                _ => MsgState::Unknown,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Zapíše profil, je-li novější než ten uložený. `Stored` = nový nebo nahrazený, `Duplicate` = nic se nezměnilo.
+    pub fn put_profile(&self, p: &ProfileRecord, max_profiles: u64) -> Result<PutOutcome, StoreError> {
+        let tx = self.db.begin_write().map_err(io)?;
+        let outcome = {
+            let mut table = tx.open_table(PROFILES).map_err(io)?;
+            let old = table.get(p.pk.as_slice()).map_err(io)?.and_then(|v| decode_profile(&p.pk, v.value()));
+            match old {
+                Some(old) if old.ts >= p.ts => PutOutcome::Duplicate,
+                Some(_) => {
+                    table.insert(p.pk.as_slice(), encode_profile(p).as_slice()).map_err(io)?;
+                    PutOutcome::Stored
+                }
+                None => {
+                    if table.len().map_err(io)? >= max_profiles {
+                        return Err(StoreError::Full);
+                    }
+                    table.insert(p.pk.as_slice(), encode_profile(p).as_slice()).map_err(io)?;
+                    PutOutcome::Stored
+                }
+            }
+        };
+        tx.commit().map_err(io)?;
+        Ok(outcome)
+    }
+
+    /// Profil uživatele, pokud ho node drží a nevypršel.
+    pub fn profile(&self, pk: &[u8; 32], now: u64) -> Result<Option<ProfileRecord>, StoreError> {
+        let tx = self.db.begin_read().map_err(io)?;
+        let table = tx.open_table(PROFILES).map_err(io)?;
+        let rec = table.get(pk.as_slice()).map_err(io)?.and_then(|v| decode_profile(pk, v.value()));
+        Ok(rec.filter(|r| r.exp > now))
+    }
+
+    /// Všechny nevypršené profily (handoff).
+    pub fn profiles(&self, now: u64) -> Result<Vec<ProfileRecord>, StoreError> {
+        let tx = self.db.begin_read().map_err(io)?;
+        let table = tx.open_table(PROFILES).map_err(io)?;
+        let mut out = Vec::new();
+        for entry in table.iter().map_err(io)? {
+            let (k, v) = entry.map_err(io)?;
+            out.extend(decode_profile(k.value(), v.value()).filter(|r| r.exp > now));
+        }
+        Ok(out)
+    }
+
+    /// Smaže profily (po handoffu, kdy node už není anchorem).
+    pub fn remove_profiles(&self, pks: &[[u8; 32]]) -> Result<(), StoreError> {
+        let tx = self.db.begin_write().map_err(io)?;
+        {
+            let mut table = tx.open_table(PROFILES).map_err(io)?;
+            for pk in pks {
+                table.remove(pk.as_slice()).map_err(io)?;
+            }
+        }
+        tx.commit().map_err(io)
     }
 
     /// Nedoručené a nevypršené zprávy mailboxu seřazené podle `(ts, id)`.
@@ -251,6 +415,20 @@ impl Store {
             self.remove(&r.mailbox_id, &[r.id])?;
             removed += 1;
         }
+        let stale: Vec<[u8; 32]> = {
+            let tx = self.db.begin_read().map_err(io)?;
+            let table = tx.open_table(PROFILES).map_err(io)?;
+            let mut v = Vec::new();
+            for entry in table.iter().map_err(io)? {
+                let (k, val) = entry.map_err(io)?;
+                if let Some(p) = decode_profile(k.value(), val.value()).filter(|p| p.exp <= now) {
+                    v.push(p.pk);
+                }
+            }
+            v
+        };
+        self.remove_profiles(&stale)?;
+        removed += stale.len();
         Ok(removed)
     }
 }

@@ -15,6 +15,8 @@ pub const DOMAIN_REPORT: &str = "ancord/v1/report";
 pub const DOMAIN_CHAN_NODE: &str = "ancord/v1/chan-node";
 pub const DOMAIN_CHAN_CLIENT: &str = "ancord/v1/chan-client";
 pub const DOMAIN_N2N_RESP: &str = "ancord/v1/n2n-resp";
+pub const DOMAIN_PUSH_REG: &str = "ancord/v1/push-reg";
+pub const DOMAIN_PROFILE: &str = "ancord/v1/profile";
 
 /// `DOMAIN ‖ 0x00 ‖ payload`.
 pub fn signing_input(domain: &str, payload: &[u8]) -> Vec<u8> {

@@ -13,6 +13,9 @@ use ancord_node::identity::Identity;
 use ancord_node::maintenance;
 use ancord_node::n2n;
 use ancord_node::presence;
+use ancord_node::profile::{self, Profile};
+use ancord_node::store::MsgState;
+use ancord_node::user::UserKeys;
 use ancord_node::server;
 use ancord_node::sign::{auth_header, verify_request};
 use ancord_node::state::NodeState;
@@ -499,6 +502,8 @@ async fn online_recipient_gets_message_pushed_and_no_wake() {
     // příjemce je připojen na nodes[0] (gateway), odesílatel píše přes nodes[3]
     let mut inbox = subscribe(&nodes[0], 1);
     assert!(presence::announce(&nodes[0].state, MB, true).await >= 2);
+    // `announce` končí po kvoru; třetí anchor presence dostane o chvíli později (do té doby by poslal wake navíc)
+    tokio::time::sleep(Duration::from_millis(300)).await;
 
     data::send_with_push(&nodes[3].state, MB, [1; 16], unix_now(), b"hello".to_vec(), Some(push_id.clone())).await.unwrap();
     let pushed = tokio::time::timeout(Duration::from_secs(3), inbox.recv()).await.unwrap().unwrap();
@@ -565,4 +570,202 @@ async fn session_is_reestablished_after_responder_forgets_it() {
     // restart responderu: session zmizí z paměti
     target.state.n2n_in.lock().unwrap().clear();
     assert_eq!(call_peer(&nodes[0], target, "get", &get).await.0, 200, "caller must renegotiate transparently");
+}
+
+
+// --- uživatelé, profily, typing a stav doručení (spec §15) --------------------------------------------------------
+
+const POW_BITS: u32 = 10;
+
+fn user_profile(keys: &UserKeys, ts: u64) -> Profile {
+    keys.profile(ts, POW_BITS)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn profile_is_found_by_address_from_any_node_and_newest_wins() {
+    let nodes = cluster(4).await;
+    let alice = UserKeys::generate(unix_now());
+    let now = unix_now();
+
+    assert_eq!(profile::get(&nodes[0].state, alice.pk()).await.unwrap_err(), DataError::NotFound);
+
+    let first = user_profile(&alice, now);
+    assert!(profile::put(&nodes[0].state, first.clone()).await.unwrap() >= 2);
+    assert_eq!(profile::get(&nodes[3].state, alice.pk()).await.unwrap(), first);
+
+    // novější profil nahradí starší, starší už nic nezmění
+    let newer = user_profile(&alice, now + 5);
+    profile::put(&nodes[1].state, newer.clone()).await.unwrap();
+    profile::put(&nodes[2].state, first).await.unwrap();
+    for n in &nodes {
+        assert_eq!(profile::get(&n.state, alice.pk()).await.unwrap(), newer);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forged_or_unproven_profiles_are_refused() {
+    let nodes = cluster(3).await;
+    let (alice, mallory) = (UserKeys::generate(unix_now()), UserKeys::generate(unix_now()));
+    let now = unix_now();
+
+    // cizí klíč `bk` pod Aliciným podpisem (podvržení)
+    let mut forged = user_profile(&alice, now);
+    forged.bk = mallory.bk_public();
+    assert_eq!(profile::put(&nodes[0].state, forged).await.unwrap_err(), DataError::InvalidProof);
+    // bez hashcash
+    let lazy = alice.profile(now, 0);
+    assert_eq!(profile::put(&nodes[0].state, lazy).await.unwrap_err(), DataError::InvalidProof);
+    // ts mimo okno
+    let stale = user_profile(&alice, now - 200_000);
+    assert!(matches!(profile::put(&nodes[0].state, stale).await.unwrap_err(), DataError::BadRequest(_)));
+
+    // anchor profil znovu ověří i tehdy, když ho pošle jiný node přímo přes node↔node
+    let dir = nodes[0].state.directory().unwrap();
+    let id = profile::profile_id(&alice.pk());
+    let anchor_ids = ancord_node::hrw::anchors(&id, dir.nodes.iter().map(|n| n.id.as_str()), dir.epoch, 3);
+    let target = nodes.iter().find(|n| anchor_ids.iter().any(|a| a == n.state.identity.node_id())).unwrap();
+    let mut bad = user_profile(&alice, now).to_json();
+    bad["bk"] = json!(b64u_encode(&mallory.bk_public()));
+    assert_eq!(call_peer(&nodes[1], target, "profile_put", &bad).await.0, 400);
+    assert_eq!(call_peer(&nodes[1], target, "profile_get", &json!({"pk": b64u_encode(&alice.pk())})).await.1["profile"], Value::Null);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn profile_survives_one_anchor_down_and_peer_api_checks_roles() {
+    let nodes = cluster(3).await;
+    let outsider = spawn_node().await;
+    let alice = UserKeys::generate(unix_now());
+    let p = user_profile(&alice, unix_now());
+    profile::put(&nodes[0].state, p.clone()).await.unwrap();
+
+    // vypnutý anchor: čtení i zápis dál fungují
+    nodes[2].server.abort();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(profile::get(&nodes[0].state, alice.pk()).await.unwrap(), p);
+    profile::put(&nodes[1].state, user_profile(&alice, unix_now() + 1)).await.unwrap();
+
+    // cizí node mimo adresář operace s profily nedostane
+    let (status, _) = call_peer(&outsider, &nodes[0], "profile_get", &json!({"pk": b64u_encode(&alice.pk())})).await;
+    assert_eq!(status, 403);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_users_start_a_conversation_through_profiles_and_the_inbox() {
+    let nodes = cluster(4).await;
+    let (alice, mut bob) = (UserKeys::generate(unix_now()), UserKeys::generate(unix_now()));
+    profile::put(&nodes[0].state, user_profile(&alice, unix_now())).await.unwrap();
+    profile::put(&nodes[1].state, user_profile(&bob, unix_now())).await.unwrap();
+
+    // Alice najde Bobův profil podle adresy a pošle mu šifrovanou obálku do jeho schránky
+    let bob_seen_by_alice = profile::get(&nodes[2].state, bob.pk()).await.unwrap();
+    let init = alice.initiate(&bob_seen_by_alice, unix_now()).unwrap();
+    let inbox = ancord_node::user::inbox_id(&bob.pk());
+    data::send(&nodes[2].state, inbox, [5; 16], unix_now(), init.envelope.clone()).await.unwrap();
+
+    // anchor schránky vidí jen náhodně vypadající bajty: adresa odesílatele v nich není
+    let stored = data::fetch(&nodes[3].state, inbox, 10).await.unwrap();
+    assert_eq!(stored.len(), 1);
+    assert!(!stored[0].ct.windows(32).any(|w| w == alice.pk()), "the sender must not be visible to the anchor");
+
+    // Bob obálku vyzvedne, ověří Alicin profil z anchorů a odvodí totéž tajemství
+    let opened = bob.open_envelope(&stored[0].ct).unwrap();
+    let alice_seen_by_bob = profile::get(&nodes[3].state, opened.peer_pk).await.unwrap();
+    let accepted = bob.accept(&opened, &alice_seen_by_bob).unwrap();
+    assert_eq!(accepted.secret, init.pairwise.secret);
+
+    // Alice píše do mailboxu, který Bob čte
+    let alice_sends = ancord_node::ratchet::Direction::InitiatorToResponder;
+    let mailbox = ancord_node::ratchet::mailbox_id(&init.pairwise.secret, alice_sends);
+    let bobs_inbox = ancord_node::ratchet::mailbox_id(&accepted.secret, alice_sends);
+    assert_eq!(mailbox, bobs_inbox);
+    data::send(&nodes[2].state, mailbox, [7; 16], unix_now(), b"hi bob".to_vec()).await.unwrap();
+    assert_eq!(data::fetch(&nodes[3].state, bobs_inbox, 10).await.unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn typing_signal_reaches_the_recipient_gateway_and_is_coalesced() {
+    let nodes = cluster(4).await;
+    // příjemce je připojen na nodes[0]
+    let mut inbox = subscribe(&nodes[0], 1);
+    assert!(presence::announce(&nodes[0].state, MB, true).await >= 2);
+
+    // odesílatel píše přes nodes[3]
+    presence::send_typing(&nodes[3].state, MB, true).unwrap();
+    let got = tokio::time::timeout(Duration::from_secs(3), inbox.recv()).await.unwrap().unwrap();
+    assert_eq!(got, json!({"t": "typing", "mailbox_id": b64u_encode(&MB), "on": true}));
+    // od ostatních anchorů nic dalšího nepřijde
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(inbox.try_recv().is_err(), "the same state must be coalesced");
+
+    // opakování téhož stavu se zahodí, změna projde
+    presence::send_typing(&nodes[3].state, MB, true).unwrap();
+    presence::send_typing(&nodes[3].state, MB, false).unwrap();
+    let got = tokio::time::timeout(Duration::from_secs(3), inbox.recv()).await.unwrap().unwrap();
+    assert_eq!(got["on"], false);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn typing_without_presence_is_dropped_and_only_anchors_may_forward_it() {
+    let nodes = cluster(4).await;
+    let mut inbox = subscribe(&nodes[0], 1);
+    // gateway presence neoznámila: signál nikam nedojde, odesílatel nedostane chybu
+    presence::send_typing(&nodes[3].state, MB, true).unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(inbox.try_recv().is_err());
+
+    // node, který není anchorem mailboxu, nesmí gateway vnutit signál
+    let dir = nodes[0].state.directory().unwrap();
+    let anchor_ids = anchors_of(&dir, &MB);
+    if let Some(non_anchor) = nodes.iter().find(|n| !anchor_ids.iter().any(|a| a == n.state.identity.node_id()) && n.host != nodes[0].host) {
+        let (status, _) = call_peer(non_anchor, &nodes[0], "typing", &json!({"mailbox_id": b64u_encode(&MB), "on": true})).await;
+        assert_eq!(status, 403);
+        assert!(inbox.try_recv().is_err());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delivery_status_follows_the_message_lifecycle() {
+    let nodes = cluster(3).await;
+    let ids = vec![[1; 16], [2; 16], [3; 16]];
+    assert_eq!(data::status(&nodes[0].state, MB, ids.clone()).await.unwrap(), vec![MsgState::Unknown; 3]);
+
+    data::send(&nodes[0].state, MB, [1; 16], unix_now(), b"a".to_vec()).await.unwrap();
+    data::send(&nodes[0].state, MB, [2; 16], unix_now(), b"b".to_vec()).await.unwrap();
+    assert_eq!(data::status(&nodes[1].state, MB, ids.clone()).await.unwrap(), vec![MsgState::Pending, MsgState::Pending, MsgState::Unknown]);
+
+    // příjemce potvrdí první zprávu: odesílatel vidí „doručeno“ přes libovolný node
+    data::ack(&nodes[2].state, MB, vec![[1; 16]]).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(data::status(&nodes[0].state, MB, ids).await.unwrap(), vec![MsgState::Delivered, MsgState::Pending, MsgState::Unknown]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn profile_handoff_moves_profiles_to_new_anchors() {
+    let nodes = cluster(4).await;
+    let refs: Vec<&TestNode> = nodes.iter().collect();
+    let alice = UserKeys::generate(unix_now());
+    let id = profile::profile_id(&alice.pk());
+    let dir1 = nodes[0].state.directory().unwrap();
+    let old = anchors_of(&dir1, &id);
+    let epoch2 = (2u64..200).find(|e| anchors_of(&directory(*e, &refs), &id) != old).unwrap();
+
+    let p = user_profile(&alice, unix_now());
+    profile::put(&nodes[0].state, p.clone()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let dir2 = directory(epoch2, &refs);
+    let new = anchors_of(&dir2, &id);
+    publish(&dir2, &refs);
+    for n in &nodes {
+        assert!(maintenance::handoff_if_needed(&n.state).await);
+    }
+    for n in &nodes {
+        let held = n.state.store.profile(&alice.pk(), unix_now()).unwrap();
+        if new.iter().any(|a| a == n.state.identity.node_id()) {
+            assert_eq!(held.map(|r| r.ts), Some(p.ts), "new anchor must hold the profile");
+        } else {
+            assert!(held.is_none(), "former anchor must give the profile up");
+        }
+    }
+    assert_eq!(profile::get(&nodes[3].state, alice.pk()).await.unwrap(), p);
 }

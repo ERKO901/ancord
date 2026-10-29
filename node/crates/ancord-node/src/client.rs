@@ -16,6 +16,7 @@ use crate::data::{self, DataError};
 use crate::encoding::{b64u_decode_array, b64u_encode};
 use crate::peer;
 use crate::presence;
+use crate::profile::{self, Profile};
 use crate::sign::{self, DOMAIN_CHAN_CLIENT, DOMAIN_CHAN_NODE};
 use crate::state::NodeState;
 use crate::ticket::{verify_ticket, TicketBody, TicketError};
@@ -264,7 +265,20 @@ async fn session(st: Arc<NodeState>, mut socket: WebSocket) {
     }
 }
 
-/// `subscribe` a `unsubscribe` (`spec/PROTOCOL.md` §13.7): gateway oznámí anchorům, že je mailbox online u něj.
+/// Mailboxy z požadavku `subscribe`/`unsubscribe`: jeden `mailbox_id`, nebo pole `mailbox_ids` (spec §15.8).
+fn requested_mailboxes(msg: &Value) -> Result<(Vec<[u8; 32]>, bool), DataError> {
+    match msg["mailbox_ids"].as_array() {
+        Some(list) if !list.is_empty() && list.len() <= presence::MAX_SUBSCRIPTIONS => {
+            let parsed: Result<Vec<[u8; 32]>, DataError> =
+                list.iter().map(|v| v.as_str().ok_or(DataError::BadRequest("mailbox_ids")).and_then(data::parse_mailbox)).collect();
+            Ok((parsed?, true))
+        }
+        Some(_) => Err(DataError::BadRequest("mailbox_ids must have 1 to 32 items")),
+        None => Ok((vec![data::parse_mailbox(field(msg, "mailbox_id")?)?], false)),
+    }
+}
+
+/// `subscribe` a `unsubscribe` (`spec/PROTOCOL.md` §13.7 a §15.8), jeden mailbox nebo dávka.
 async fn subscription(
     st: &Arc<NodeState>,
     msg: &Value,
@@ -272,17 +286,45 @@ async fn subscription(
     tx: &mpsc::Sender<Value>,
     subscribed: &mut HashSet<[u8; 32]>,
 ) -> Result<Value, DataError> {
-    let mailbox = data::parse_mailbox(field(msg, "mailbox_id")?)?;
+    let (mailboxes, batch) = requested_mailboxes(msg)?;
+    if msg["t"] != "unsubscribe" {
+        let fresh: HashSet<&[u8; 32]> = mailboxes.iter().filter(|m| !subscribed.contains(*m)).collect();
+        if subscribed.len() + fresh.len() > presence::MAX_SUBSCRIPTIONS {
+            return Err(DataError::BadRequest("too many subscriptions"));
+        }
+        // bez adresáře nemá kdo anchory spočítat; chyba kteréhokoli mailboxu zruší celou dávku
+        for m in &mailboxes {
+            data::plan(st, m)?;
+        }
+    }
+    let mut replies = Vec::with_capacity(mailboxes.len());
+    for mailbox in mailboxes {
+        replies.push(subscription_one(st, &msg["t"], mailbox, conn, tx, subscribed).await?);
+    }
+    if !batch {
+        return Ok(replies.swap_remove(0));
+    }
+    let t = replies.first().map_or(Value::Null, |r| r["t"].clone());
+    let ids: Vec<Value> = replies.iter().map(|r| r["mailbox_id"].clone()).collect();
+    let anchors: Vec<Value> = replies.iter().map(|r| r["anchors"].clone()).collect();
+    Ok(json!({"t": t, "mailbox_ids": ids, "anchors": anchors}))
+}
+
+async fn subscription_one(
+    st: &Arc<NodeState>,
+    kind: &Value,
+    mailbox: [u8; 32],
+    conn: u64,
+    tx: &mpsc::Sender<Value>,
+    subscribed: &mut HashSet<[u8; 32]>,
+) -> Result<Value, DataError> {
     let id = b64u_encode(&mailbox);
-    if msg["t"] == "unsubscribe" {
+    if kind == "unsubscribe" {
         subscribed.remove(&mailbox);
         if presence::remove_subscriber(st, conn, mailbox) {
             presence::announce(st, mailbox, false).await;
         }
         return Ok(json!({"t": "unsubscribed", "mailbox_id": id}));
-    }
-    if !subscribed.contains(&mailbox) && subscribed.len() >= presence::MAX_SUBSCRIPTIONS {
-        return Err(DataError::BadRequest("too many subscriptions"));
     }
     // bez adresáře nemá kdo anchory spočítat
     data::plan(st, &mailbox)?;
@@ -334,12 +376,16 @@ fn error_reply(e: &DataError, request: Option<&Value>) -> Value {
     reply
 }
 
-/// Zpracuje `send`, `fetch` nebo `ack` (`spec/PROTOCOL.md` §13.3).
+/// Zpracuje `send`, `fetch`, `ack` (`spec/PROTOCOL.md` §13.3) a požadavky z §15 (profil, typing, stav doručení).
 async fn handle(st: &Arc<NodeState>, msg: &Value) -> Value {
     let result = match msg["t"].as_str() {
         Some("send") => do_send(st, msg).await,
         Some("fetch") => do_fetch(st, msg).await,
         Some("ack") => do_ack(st, msg).await,
+        Some("profile_put") => do_profile_put(st, msg).await,
+        Some("profile_get") => do_profile_get(st, msg).await,
+        Some("typing") => do_typing(st, msg),
+        Some("status") => do_status(st, msg).await,
         _ => Err(DataError::BadRequest("unknown message type")),
     };
     let mut reply = result.unwrap_or_else(|e| error_reply(&e, None));
@@ -374,4 +420,32 @@ async fn do_ack(st: &Arc<NodeState>, msg: &Value) -> Result<Value, DataError> {
     let n = ids.len();
     data::ack(st, mailbox, ids).await?;
     Ok(json!({"t": "acked", "n": n}))
+}
+
+async fn do_profile_put(st: &Arc<NodeState>, msg: &Value) -> Result<Value, DataError> {
+    let profile = Profile::from_json(msg).ok_or(DataError::BadRequest("invalid profile"))?;
+    let acks = profile::put(st, profile).await?;
+    Ok(json!({"t": "profile_stored", "acks": acks}))
+}
+
+async fn do_profile_get(st: &Arc<NodeState>, msg: &Value) -> Result<Value, DataError> {
+    let pk = profile::parse_pk(field(msg, "pk")?)?;
+    let found = profile::get(st, pk).await?;
+    let mut reply = found.to_json();
+    reply["t"] = json!("profile");
+    Ok(reply)
+}
+
+fn do_typing(st: &Arc<NodeState>, msg: &Value) -> Result<Value, DataError> {
+    let mailbox = data::parse_mailbox(field(msg, "mailbox_id")?)?;
+    let on = msg["on"].as_bool().ok_or(DataError::BadRequest("on"))?;
+    presence::send_typing(st, mailbox, on)?;
+    Ok(json!({"t": "typing_ok"}))
+}
+
+async fn do_status(st: &Arc<NodeState>, msg: &Value) -> Result<Value, DataError> {
+    let mailbox = data::parse_mailbox(field(msg, "mailbox_id")?)?;
+    let ids = peer::parse_ids(&msg["ids"])?;
+    let states = data::status(st, mailbox, ids).await?;
+    Ok(json!({"t": "status", "mailbox_id": b64u_encode(&mailbox), "states": states.iter().map(|s| s.as_str()).collect::<Vec<_>>()}))
 }

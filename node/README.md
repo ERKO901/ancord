@@ -5,10 +5,12 @@ Node sítě ancord (Rust). Protokol je v `../spec/PROTOCOL.md`, architektura v `
 ## Stav
 - **B1** identita, registrace (`register → confirm → activate`), `cloudflared`, heartbeat, odpovědi na challenge (`cpu`, `space_commit`/`space_open`, `bandwidth`, `witness`).
 - **B2** admission klientů (`/client`, ticket + důkaz držení `ek`, PROTOCOL §8.1) a minimální CLI klient.
-- **B3** data plane (`PROTOCOL.md` §13): blinded mailboxy v redb, HRW anchory podle epochy, replikace R=3 s kvorem 2, idempotentní zápis, ack s náhrobky, TTL úklid, handoff po změně epochy, podepsané node↔node requesty (`/n/put`, `/n/get`, `/n/ack`). Ratchet (ChaCha20-Poly1305 + HKDF) je klientská knihovna v `ratchet.rs`, node ho nikdy nepočítá.
+- **B3** data plane (`PROTOCOL.md` §13): blinded mailboxy v redb, HRW anchory podle epochy, replikace R=3 s kvorem 2, idempotentní zápis, ack s náhrobky, TTL úklid, handoff po změně epochy, podepsané node↔node requesty (`/n/put`, `/n/get`, `/n/ack`). Double Ratchet (X25519 + ChaCha20-Poly1305 + HKDF) je klientská knihovna v `ratchet.rs`, node ho nikdy nepočítá.
 - **B6** zabezpečený kanál (`PROTOCOL.md` §14): klient↔node i node↔node šifrované vlastním handshakem (X25519, identita nodu podpisem Ed25519, ChaCha20-Poly1305 / XChaCha20-Poly1305, padding), aby Cloudflare po ukončení TLS neviděl `mailbox_id`, tickety ani `push_id`. Klient ověřuje ticket připnutým klíčem Workeru (`WORKER_PUBKEY`, nutný i pro CLI). Holé `/n/*` API neexistuje. Vektory `channel.json` z nezávislé implementace `spec/reference/channel.py`.
 - **B5** presence a online doručení (`PROTOCOL.md` §13.7): `subscribe` u gateway, presence na anchorech (jen v paměti, TTL), anchor novou zprávu přepošle gateway příjemce (`/n/presence`, `/n/deliver`); wake jen když doručení online selže. CLI: `ancord watch`.
 - **B4** push (`PROTOCOL.md` §13.6): `send` s volitelným `push_id` příjemce; anchor, který zprávu nově uložil, pošle Workeru podepsaný `POST /wake` (selhání wake zápis nikdy neshodí). 
+- **B8** uživatelský tok (`PROTOCOL.md` §15.10 až §15.12): adresa `ancord:<pk>` jako text nebo QR, push klíče schránky (v profilu) a konverzací (ze sdíleného tajemství), registrace push tokenu, online klient s automatickým přijetím kontaktů a znovupřipojením.
+- **B7** identita uživatele a funkce z `melo` (`PROTOCOL.md` §15): profil s veřejným klíčem na anchorech (`profile_put`/`profile_get`), X3DH s rotujícím a jednorázovými prekeys a šifrovanou obálkou ve schránce (`user.rs`), bezpečnostní číslo, typing, stav doručení, dávkový `subscribe`, lokální historie. Vektor `pairwise.json` z nezávislé implementace `spec/reference/pairwise.py`.
 
 ## Příkazy
 ```
@@ -19,14 +21,40 @@ WORKER_PUBKEY=$(curl -s http://127.0.0.1:8787/.well-known/ancord-key | jq -r .pu
 cargo run -p ancord-cli -- --worker http://127.0.0.1:8787 route
 ```
 
-## CLI klient: zprávy
+## CLI klient: běžné použití
+Dva uživatelé si předají adresu (QR kód nebo text) a jsou online:
+```
+ancord keygen alice.user                                    # klíče; vypíše adresu ancord:<veřejný klíč>
+ancord whoami --qr alice.user                               # adresa jako QR kód a text, předejte ji protistraně
+ancord push-register alice.user convs/ --platform fcm --token <token>   # volitelně: push, když nejste online
+ancord online alice.user convs/                             # zůstane připojený (Ctrl-C konec)
+```
+V `online` se píše na vstup: `/start ancord:<adresa> bob` založí konverzaci `bob` (protistrana ji dostane sama, i když je offline: vzbudí ji push), `bob: ahoj` pošle zprávu, `/list` vypíše konverzace. Příchozí zprávy se vypisují jako `bob: text`, nové kontakty i s bezpečnostním číslem (porovnejte ho s protistranou mimo síť). Konverzace jsou soubory `convs/<jméno>.json`. Profil se zveřejní při každém připojení. Jedno spojení odebírá nejvýše 31 konverzací. Dokud `online` běží, ostatní příkazy nad stejnými soubory odmítnou běžet (zámek `*.lock`), aby se stav ratchetu nerozešel.
+
+Průběh: `online` si od Workeru vyžádá 3 nody (`/route`), připojí se na první, který ho přijme, a odebírá schránku i všechny konverzace. Gateway to oznámí anchorům (presence) a ti nové zprávy přeposílají rovnou. Po odpojení presence zanikne a anchory pošlou přes Worker push na tokeny z `push-register`. Při výpadku nodu se `online` připojí znovu přes nový `/route`.
+
+## CLI klient: konverzace podle veřejného klíče (jednotlivé kroky)
+```
+ancord keygen alice.user                                # vypíše adresu (veřejný klíč), kterou předáte dál
+ancord --worker $WORKER_URL publish alice.user          # rotuje prekey, doplní jednorázové a zveřejní profil
+ancord --worker $WORKER_URL start alice.user ancord:<adresa-boba> alice-bob.json   # X3DH + obálka do Bobovy schránky
+ancord --worker $WORKER_URL inbox bob.user convs/       # Bob vyzvedne obálky a založí konverzace
+ancord safety alice.user <adresa-boba>                  # bezpečnostní číslo: porovnat s protistranou mimo síť
+ancord --worker $WORKER_URL send alice-bob.json "ahoj"  # vypíše id zprávy
+ancord --worker $WORKER_URL typing alice-bob.json       # protistrana vidí „(typing…)“ ve `watch`
+ancord --worker $WORKER_URL status alice-bob.json <id>  # pending / delivered / unknown
+ancord history alice-bob.json                           # lokální historie (server ji nedrží)
+```
+Po `inbox` spusťte znovu `publish` (použité jednorázové prekeys jsou smazané) a profil obnovujte aspoň jednou týdně. Soubory `*.user` a konverzace obsahují tajné klíče (práva 0600), zálohou stavu ratchetu se poškodí.
+
+## CLI klient: zprávy se sdíleným tajemstvím
 ```
 ancord init alice.json --role initiator                 # vypíše sdílené tajemství
 ancord init bob.json --role responder --secret <b64u>   # protistrana zadá totéž tajemství
 ancord --worker $WORKER_URL send alice.json "ahoj"
 ancord --worker $WORKER_URL recv bob.json               # vypíše, dešifruje a potvrdí
 ```
-Soubor konverzace obsahuje klíče (práva 0600) a stav ratchetu; ukládá se před odesláním, aby se číslo zprávy nepoužilo dvakrát. Obnova ze zálohy stavu ratchet poškodí.
+Soubor konverzace obsahuje klíče (práva 0600) a stav ratchetu; ukládá se před odesláním, aby se číslo zprávy nepoužilo dvakrát. Obnova ze zálohy stavu ratchet poškodí. Ratchet je Double Ratchet: konverzace se po úniku stavu uzdraví, jakmile si strany vymění zprávy v obou směrech. Responder může psát až po první zprávě iniciátora.
 
 ## Konfigurace nodu
 Jediný povinný vstup je `WORKER_URL`. Ostatní má výchozí hodnotu nebo se změří na hostiteli (`ancord-node --help`).

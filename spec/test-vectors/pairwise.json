@@ -1,0 +1,63 @@
+{
+  "description": "Profil, X3DH, ob\u00e1lka, schr\u00e1nka, push kl\u00ed\u010de a bezpe\u010dnostn\u00ed \u010d\u00edslo (spec \u00a715), vygenerov\u00e1no spec/reference/pairwise.py (Python, cryptography)",
+  "pow_bits": 8,
+  "now": 1700000000,
+  "alice": {
+    "uk_seed": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+    "ik_seed": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+    "push_seed": "CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws",
+    "profile": {
+      "pk": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w",
+      "bk": "zo060cy2M-x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk",
+      "spk": "V9tLNZ8jrl4Ubk4lEgVnBHIlBjSMFQwUdT0Mkz0E1CE",
+      "otks": [],
+      "push_id": "siec5d5hv46u5b2u3xk3hchoijven2fnfqkpzv7nxbakl5azuyxq",
+      "ts": 1700000000,
+      "pow": 299,
+      "sig": "zX_w2P-KyiWSwf1yOwd1Ks18wMqj2SO9bF62nATSVF6G689cTdIJOo5vcSrcThzWovYkYMbUi7iuviAlRxRXDg"
+    }
+  },
+  "bob": {
+    "uk_seed": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+    "ik_seed": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+    "spk_seed": "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU",
+    "push_seed": "CgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgo",
+    "otk_seeds": [
+      "BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY",
+      "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc"
+    ],
+    "profile": {
+      "pk": "7UkoxijRwsbq6QM4kFmVYSlZJzpcY_k2NsFGFKyHN9E",
+      "bk": "rAGyIJ6GNU-4UyN7XeD0-rE8f8v0M6YcAZNpYX_s8Qs",
+      "spk": "UKYUCbHd0DJemxa3AOcZ6XcsBwALG9d4bpB8ZT0gSV0",
+      "otks": [
+        "9bLW5g-Ud-MQwpgtqqbJE2wQihd3xZR-RI-jfWgXRVc",
+        "E75P6uryBMf9M1j8nAByGIHRdCeBKCJ-xnTzf3_pe20"
+      ],
+      "push_id": "gzaiyjj3mk2u24pseyu2flyqxkecu5titd57kayqoknw3moedc2a",
+      "ts": 1700000000,
+      "pow": 204,
+      "sig": "dYDRVrsT2sB9QOR7mLrZJPUSD_cN3xjK9tU4VpbJtx-P4YFFlnqFv4o2_gzd-RS3mk5emGYLzXulpLxoNQFIAg"
+    },
+    "inbox_id": "NLc3bG2t6KjeqMoZ5iEtHs7azt3pCinmtUe8OzGsuzk"
+  },
+  "handshake": {
+    "ek_seed": "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg",
+    "otk_index": 1,
+    "secret": "hdjUpK1MO9bw0mvjmX-INivBHlrcQIATsmE7ZcyYsoU",
+    "envelope": "ATIShL9fDBAZMdSras7slhE3kXA3k25gcW-sVzr-lNnahKgCBEjfwRJatmXrkoGE_X1p5rv0PmgVkRXsp2LFdfK5JDiq5E5fvCYXOz0VyLmJJeH93nujrNzX231RfvNCgLjSB1L0AWsbiZWKACEApVPi9MFv2ORnCw"
+  },
+  "mailbox_push": {
+    "i2r": {
+      "mailbox_id": "tYdtJIeELd0ZxKbueEtV5_AIUkVbbBggoQs2QEeUz4U",
+      "push_seed": "0_-aNYc4aZYmAROw1VGvrGTkYvcDgEQeJVK5dLgC3CA",
+      "push_id": "3pl6zv65ng6tmwapzj7o3lw52wv6zlnmravuso2xsbee7ou7gt7a"
+    },
+    "r2i": {
+      "mailbox_id": "AWG-YVQWI32ev4kF33kFM8EGfewfWDMBgBi2RYOqJgk",
+      "push_seed": "i1GOTLp3FE5eDhV1CqlS5hbFfwfFXk8dBC4FRJoIDHw",
+      "push_id": "zei64r2os4uqckrssjygc42i7jvceonf6lwl7jnpn62rd6f7cjtq"
+    }
+  },
+  "safety_number": "24397 14913 43585 19547 36085 18004 23094 06952 34823 01437 54289 47863"
+}

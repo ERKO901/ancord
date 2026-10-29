@@ -1,13 +1,19 @@
 //! Minimální klient: `GET /route`, zabezpečené připojení na node s ticketem a failover (`spec/PROTOCOL.md` §8, §8.1, §14.1).
 
+pub mod online;
+
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use ancord_node::channel::{self, Channel, Ephemeral};
 use ancord_node::encoding::{b64u_decode_array, b64u_encode};
 use ancord_node::identity::node_id_of;
-use ancord_node::ratchet::{Direction, Receiver, Sender};
+use ancord_node::profile::Profile;
+use ancord_node::ratchet::Ratchet;
 use ancord_node::sign::{self, sign, DOMAIN_CHAN_CLIENT, DOMAIN_CHAN_NODE};
 use ancord_node::ticket::verify_ticket;
+use ancord_node::user::{inbox_id, mailbox_push_key, FirstRatchetKey, Opened, Pairwise, UserKeys};
+use ancord_node::wake::push_id_of;
 use ed25519_dalek::SigningKey;
 use futures_util::{SinkExt, StreamExt};
 use rand::RngCore;
@@ -16,6 +22,7 @@ use serde_json::{json, Value};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+use x25519_dalek::StaticSecret;
 
 type RawSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -30,6 +37,8 @@ impl std::fmt::Debug for NodeSocket {
 pub struct NodeSocket {
     ws: RawSocket,
     chan: Channel,
+    /// Rámce bez `rid` (`message`, `typing`), které gateway poslala, zatímco `rpc` čekal na odpověď.
+    queued: VecDeque<Value>,
 }
 
 impl NodeSocket {
@@ -40,6 +49,9 @@ impl NodeSocket {
 
     /// Další zpráva od nodu. Rámec, který nejde ověřit, je chyba spojení (nikdy se nepřeskakuje).
     pub async fn recv_json(&mut self) -> Result<Value, CliError> {
+        if let Some(v) = self.queued.pop_front() {
+            return Ok(v);
+        }
         loop {
             let frame = self
                 .ws
@@ -181,7 +193,7 @@ pub async fn admit_unchecked(url: &str, node: &RouteNode, ek: &SigningKey) -> Re
         return Err(admission(&node.node_id, "node failed to prove its identity"));
     }
     let shared = ce.diffie_hellman(&ne).map_err(|e| admission(&node.node_id, e.to_string()))?;
-    let mut conn = NodeSocket { ws, chan: Channel::for_client(&shared, &th) };
+    let mut conn = NodeSocket { ws, chan: Channel::for_client(&shared, &th), queued: VecDeque::new() };
 
     let auth = json!({"t": "auth", "ticket": node.ticket, "sig": b64u_encode(&sign(ek, DOMAIN_CHAN_CLIENT, &th))});
     conn.send_json(&auth).await.map_err(|e| admission(&node.node_id, e.to_string()))?;
@@ -219,27 +231,52 @@ pub fn default_url(hostname: &str) -> String {
 }
 
 /// Jeden požadavek a odpověď na již přijatém spojení (spec §13.3). Odpověď se páruje podle `rid`;
-/// zprávy `message` přeposlané anchorem mezitím zůstávají v mailboxu a vyzvednou se přes `fetch`.
+/// zprávy `message` a `typing`, které gateway mezitím pošle, se zařadí a vrátí další `recv_json`.
 pub async fn rpc(ws: &mut NodeSocket, mut request: Value) -> Result<Value, CliError> {
     let mut raw = [0u8; 8];
     rand::rngs::OsRng.fill_bytes(&mut raw);
     let rid = b64u_encode(&raw);
     request["rid"] = json!(rid);
     ws.send_json(&request).await?;
-    let wait = Duration::from_secs(30);
-    loop {
-        let reply = ws.recv_json_timeout(wait).await?.ok_or_else(|| CliError::Connection("timeout".into()))?;
-        if reply["rid"] != rid.as_str() {
-            continue;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut queued = Vec::new();
+    let reply = loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let frame = match tokio::time::timeout(left, read_frame(ws)).await {
+            Err(_) => Err(CliError::Connection("timeout".into())),
+            Ok(r) => r,
+        };
+        let frame = match frame {
+            Ok(f) => f,
+            Err(e) => {
+                ws.queued.extend(queued);
+                return Err(e);
+            }
+        };
+        if frame["rid"] == rid.as_str() {
+            break frame;
         }
-        if reply["t"] == "error" {
-            return Err(CliError::Node {
-                code: reply["code"].as_str().unwrap_or("error").to_owned(),
-                reason: reply["reason"].as_str().unwrap_or("").to_owned(),
-            });
+        // odpověď na dřívější požadavek, který vypršel, se zahodí
+        if frame.get("rid").is_none() {
+            queued.push(frame);
         }
-        return Ok(reply);
+    };
+    ws.queued.extend(queued);
+    if reply["t"] == "error" {
+        return Err(CliError::Node {
+            code: reply["code"].as_str().unwrap_or("error").to_owned(),
+            reason: reply["reason"].as_str().unwrap_or("").to_owned(),
+        });
     }
+    Ok(reply)
+}
+
+/// Další rámec ze sítě (frontu obchází: `rpc` musí vidět i odpovědi, které přijdou po zařazených rámcích).
+async fn read_frame(ws: &mut NodeSocket) -> Result<Value, CliError> {
+    let queued = std::mem::take(&mut ws.queued);
+    let frame = ws.recv_json().await;
+    ws.queued = queued;
+    frame
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -248,22 +285,33 @@ pub enum Role {
     Responder,
 }
 
-impl Role {
-    fn sending(self) -> Direction {
-        match self {
-            Self::Initiator => Direction::InitiatorToResponder,
-            Self::Responder => Direction::ResponderToInitiator,
-        }
-    }
-}
-
-/// Stav konverzace jedné dvojice: sdílené tajemství a oba ratchety. Ukládá se do souboru.
+/// Stav konverzace jedné dvojice: sdílené tajemství a Double Ratchet. Ukládá se do souboru.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub secret: [u8; 32],
     pub role: Role,
-    tx: Sender,
-    rx: Receiver,
+    /// Adresa protistrany (b64u), je-li konverzace založená podle adresy (spec §15.4).
+    #[serde(default)]
+    pub peer: Option<String>,
+    ratchet: Ratchet,
+    /// Lokální historie konverzace (spec §15.7): server ji nedrží.
+    #[serde(default)]
+    pub history: Vec<HistoryEntry>,
+}
+
+/// Jedna zpráva v lokální historii.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub ts: u64,
+    /// `true` = odeslaná tímto klientem.
+    pub outgoing: bool,
+    /// `id` zprávy (b64u).
+    pub id: String,
+    pub text: String,
+}
+
+pub(crate) fn now_s() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
 /// Zpráva zašifrovaná a připravená k odeslání. Opakované odeslání téhož objektu je idempotentní.
@@ -272,6 +320,8 @@ pub struct Prepared {
     pub id: [u8; 16],
     pub mailbox_id: [u8; 32],
     pub ct: String,
+    /// `push_id` mailboxu příjemce (spec §15.11): anchor podle něj příjemce vzbudí, není-li online.
+    pub push_id: String,
 }
 
 #[derive(Debug, Default)]
@@ -282,13 +332,24 @@ pub struct Received {
 }
 
 impl Session {
-    pub fn new(secret: [u8; 32], role: Role) -> Self {
-        Self {
-            secret,
-            role,
-            tx: Sender::new(&secret, role.sending()),
-            rx: Receiver::new(&secret, role.sending().opposite()),
-        }
+    /// Konverzace jen ze sdíleného tajemství (bez prekeys): první ratchet klíč responderu se z něj odvodí (spec §13.2).
+    pub fn new(secret: [u8; 32], role: Role) -> Result<Self, CliError> {
+        let ratchet = Ratchet::from_shared_secret(&secret, role == Role::Initiator).map_err(|e| CliError::Session(e.to_string()))?;
+        Ok(Self { secret, role, peer: None, ratchet, history: Vec::new() })
+    }
+
+    /// Konverzace ze sdíleného tajemství, které vzešlo z dohody mezi uživateli (spec §15.4).
+    pub fn from_pairwise(pair: &Pairwise) -> Result<Self, CliError> {
+        let (role, ratchet) = match &pair.ratchet_key {
+            FirstRatchetKey::Peer(spk) => (Role::Initiator, Ratchet::initiator(&pair.secret, spk)),
+            FirstRatchetKey::Own(spk_secret) => (Role::Responder, Ok(Ratchet::responder(&pair.secret, &StaticSecret::from(*spk_secret)))),
+        };
+        let ratchet = ratchet.map_err(|e| CliError::Session(e.to_string()))?;
+        Ok(Self { secret: pair.secret, role, peer: None, ratchet, history: Vec::new() })
+    }
+
+    fn record(&mut self, outgoing: bool, id: &[u8; 16], plaintext: &[u8]) {
+        self.history.push(HistoryEntry { ts: now_s(), outgoing, id: b64u_encode(id), text: String::from_utf8_lossy(plaintext).into_owned() });
     }
 
     pub fn load(path: &std::path::Path) -> Result<Self, CliError> {
@@ -318,21 +379,38 @@ impl Session {
     pub fn prepare(&mut self, plaintext: &[u8]) -> Result<Prepared, CliError> {
         let mut id = [0u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut id);
-        let ct = self.tx.seal(&id, plaintext).map_err(|e| CliError::Session(e.to_string()))?;
-        Ok(Prepared { id, mailbox_id: self.tx.mailbox_id(), ct })
+        let ct = self.ratchet.seal(&id, plaintext).map_err(|e| CliError::Session(e.to_string()))?;
+        self.record(true, &id, plaintext);
+        Ok(Prepared { id, mailbox_id: self.ratchet.send_mailbox_id(), ct, push_id: self.outbox_push_id() })
+    }
+
+    /// Push klíč příchozího mailboxu: pod jeho `push_id` registruje tento klient token u Workeru (spec §15.11).
+    pub fn inbox_push_key(&self) -> SigningKey {
+        mailbox_push_key(&self.secret, &self.inbox())
+    }
+
+    /// `push_id` mailboxu, do kterého tento klient píše (protistrana ho má zaregistrovaný).
+    pub fn outbox_push_id(&self) -> String {
+        push_id_of(&mailbox_push_key(&self.secret, &self.outbox()).verifying_key().to_bytes())
     }
 
     pub fn inbox(&self) -> [u8; 32] {
-        self.rx.mailbox_id()
+        self.ratchet.recv_mailbox_id()
+    }
+
+    /// Mailbox, do kterého tento klient píše (kam míří `typing` a `status`).
+    pub fn outbox(&self) -> [u8; 32] {
+        self.ratchet.send_mailbox_id()
     }
 }
 
-/// Odešle připravenou zprávu. Vrací počet anchorů, které ji potvrdily.
+/// Odešle připravenou zprávu. Vrací počet anchorů, které ji potvrdily. Není-li příjemce online, anchory ho vzbudí
+/// pushem (spec §13.6).
 pub async fn transmit(ws: &mut NodeSocket, msg: &Prepared) -> Result<u64, CliError> {
-    transmit_with_push(ws, msg, None).await
+    transmit_with_push(ws, msg, Some(&msg.push_id)).await
 }
 
-/// Jako `transmit`; s `push_id` příjemce anchory po uložení zprávy pošlou wake (spec §13.6).
+/// Jako `transmit` s jiným nebo žádným `push_id`.
 pub async fn transmit_with_push(ws: &mut NodeSocket, msg: &Prepared, push_id: Option<&str>) -> Result<u64, CliError> {
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let mut request = json!({"t": "send", "id": b64u_encode(&msg.id), "mailbox_id": b64u_encode(&msg.mailbox_id), "ts": ts, "ct": msg.ct});
@@ -352,17 +430,20 @@ pub async fn receive(ws: &mut NodeSocket, session: &mut Session) -> Result<Recei
     let mut delivered = Vec::new();
     for m in reply["messages"].as_array().map_or(&[][..], Vec::as_slice) {
         let parsed = m["id"].as_str().and_then(b64u_decode_array::<16>).zip(m["ct"].as_str());
-        match parsed.map(|(id, ct)| (id, session.rx.open_numbered(&id, ct))) {
+        match parsed.map(|(id, ct)| (id, session.ratchet.open_numbered(&id, ct))) {
             Some((id, Ok((n, plain)))) => {
-                opened.push((n, plain));
+                opened.push((n, id, plain));
                 delivered.push(b64u_encode(&id));
             }
             _ => out.rejected += 1,
         }
     }
-    // pořadí určuje ratchet, ne `ts` (sekundová přesnost)
-    opened.sort_by_key(|(n, _)| *n);
-    out.messages = opened.into_iter().map(|(_, plain)| plain).collect();
+    // pořadí určuje `seq` z hlavičky ratchetu, ne `ts` (sekundová přesnost)
+    opened.sort_by_key(|(n, _, _)| *n);
+    for (_, id, plain) in &opened {
+        session.record(false, id, plain);
+    }
+    out.messages = opened.into_iter().map(|(_, _, plain)| plain).collect();
     if !delivered.is_empty() {
         rpc(ws, json!({"t": "ack", "mailbox_id": b64u_encode(&mailbox), "ids": delivered})).await?;
     }
@@ -375,20 +456,265 @@ pub async fn subscribe(ws: &mut NodeSocket, session: &Session) -> Result<(), Cli
     rpc(ws, json!({"t": "subscribe", "mailbox_id": b64u_encode(&session.inbox())})).await.map(|_| ())
 }
 
-/// Počká na zprávu, kterou anchor přeposlal na gateway, dešifruje ji a potvrdí. `None` po vypršení `wait`.
-/// Duplicity a nedešifrovatelné zprávy přeskočí. `session` je po volání nutné uložit.
-pub async fn next_pushed(ws: &mut NodeSocket, session: &mut Session, wait: Duration) -> Result<Option<Vec<u8>>, CliError> {
+/// Událost, kterou gateway posílá po `subscribe`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Event {
+    /// Dešifrovaná a potvrzená zpráva.
+    Message(Vec<u8>),
+    /// Protistrana začala (`true`) nebo přestala psát.
+    Typing(bool),
+}
+
+/// Počká na událost od gateway: zprávu (anchor ji přeposlal; dešifruje se a potvrdí) nebo signál psaní.
+/// `None` po vypršení `wait`. Duplicity a nedešifrovatelné zprávy přeskočí. `session` je po volání nutné uložit.
+pub async fn next_event(ws: &mut NodeSocket, session: &mut Session, wait: Duration) -> Result<Option<Event>, CliError> {
     let deadline = tokio::time::Instant::now() + wait;
     loop {
         let left = deadline.saturating_duration_since(tokio::time::Instant::now());
         let Some(push) = ws.recv_json_timeout(left).await? else { return Ok(None) };
-        if push["t"] != "message" || push["mailbox_id"] != b64u_encode(&session.inbox()).as_str() {
-            continue;
-        }
-        let Some((id, ct)) = push["id"].as_str().and_then(b64u_decode_array::<16>).zip(push["ct"].as_str()) else { continue };
-        if let Ok(plain) = session.rx.open(&id, ct) {
-            rpc(ws, json!({"t": "ack", "mailbox_id": b64u_encode(&session.inbox()), "ids": [b64u_encode(&id)]})).await?;
-            return Ok(Some(plain));
+        match push["t"].as_str() {
+            // psát smí jen protistrana, takže zajímá jen signál z našeho příchozího mailboxu
+            Some("typing") if push["mailbox_id"] == b64u_encode(&session.inbox()).as_str() => {
+                return Ok(Some(Event::Typing(push["on"].as_bool().unwrap_or(false))));
+            }
+            Some("message") if push["mailbox_id"] == b64u_encode(&session.inbox()).as_str() => {
+                let Some((id, ct)) = push["id"].as_str().and_then(b64u_decode_array::<16>).zip(push["ct"].as_str()) else { continue };
+                if let Ok(plain) = session.ratchet.open(&id, ct) {
+                    rpc(ws, json!({"t": "ack", "mailbox_id": b64u_encode(&session.inbox()), "ids": [b64u_encode(&id)]})).await?;
+                    session.record(false, &id, &plain);
+                    return Ok(Some(Event::Message(plain)));
+                }
+            }
+            _ => {}
         }
     }
+}
+
+/// Jako `next_event`, ale vrací jen zprávy (signály psaní zahazuje).
+pub async fn next_pushed(ws: &mut NodeSocket, session: &mut Session, wait: Duration) -> Result<Option<Vec<u8>>, CliError> {
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match next_event(ws, session, left).await? {
+            Some(Event::Message(m)) => return Ok(Some(m)),
+            Some(Event::Typing(_)) => {}
+            None => return Ok(None),
+        }
+    }
+}
+
+// --- uživatel (spec §15) -----------------------------------------------------------------------------------
+
+/// Zapíše soubor s právy 0600; `create_new` existující nepřepíše, jinak atomicky přes dočasný soubor.
+pub fn write_private(path: &std::path::Path, text: &str, create_new: bool) -> Result<(), CliError> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let target = if create_new { path.to_path_buf() } else { path.with_extension("tmp") };
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).mode(0o600);
+    if create_new {
+        options.create_new(true);
+    } else {
+        options.create(true).truncate(true);
+    }
+    let mut file = options.open(&target).map_err(|e| CliError::Session(format!("{}: {e}", target.display())))?;
+    file.write_all(text.as_bytes()).map_err(|e| CliError::Session(e.to_string()))?;
+    file.sync_all().map_err(|e| CliError::Session(e.to_string()))?;
+    if !create_new {
+        std::fs::rename(&target, path).map_err(|e| CliError::Session(format!("{}: {e}", path.display())))?;
+    }
+    Ok(())
+}
+
+/// Založí soubor s klíči uživatele (práva 0600); existující soubor nikdy nepřepíše.
+pub fn create_user(keys: &UserKeys, path: &std::path::Path) -> Result<(), CliError> {
+    write_private(path, &keys.to_json(), true)
+}
+
+/// Uloží klíče (včetně smazání použitých jednorázových prekeys) atomicky: zápis do dočasného souboru a přejmenování.
+pub fn save_user(keys: &UserKeys, path: &std::path::Path) -> Result<(), CliError> {
+    write_private(path, &keys.to_json(), false)
+}
+
+pub fn load_user(path: &std::path::Path) -> Result<UserKeys, CliError> {
+    let text = std::fs::read_to_string(path).map_err(|e| CliError::Session(format!("{}: {e}", path.display())))?;
+    UserKeys::from_json(&text).ok_or_else(|| CliError::Session(format!("{}: malformed keys", path.display())))
+}
+
+/// Adresa uživatele pro předání protistraně (QR kód nebo text): `ancord:<pk>` (spec §15.10).
+pub fn address(keys: &UserKeys) -> String {
+    ancord_node::user::address_uri(&keys.pk())
+}
+
+/// Adresa protistrany z textu (`ancord:<pk>` nebo holé `pk`).
+pub fn parse_address(text: &str) -> Result<[u8; 32], CliError> {
+    ancord_node::user::parse_address(text).ok_or_else(|| CliError::Session("not an ancord address (expected ancord:<public key>)".into()))
+}
+
+/// Zaregistruje push token u Workeru pod `push_id` daného klíče (spec §10.1). `ts` musí s každou registrací růst.
+pub async fn register_push(http: &reqwest::Client, worker: &str, key: &SigningKey, platform: &str, token: &str, ts: u64) -> Result<String, CliError> {
+    let push_pubkey = key.verifying_key().to_bytes();
+    let push_id = push_id_of(&push_pubkey);
+    let payload = ancord_node::canonical::canonical_bytes(&json!({"op": "register", "platform": platform, "push_id": push_id, "token": token, "ts": ts}))
+        .map_err(|e| CliError::Session(e.to_string()))?;
+    let body = json!({
+        "push_pubkey": b64u_encode(&push_pubkey), "platform": platform, "token": token, "ts": ts,
+        "sig": b64u_encode(&sign(key, sign::DOMAIN_PUSH_REG, &payload)),
+    });
+    let url = format!("{}/push/register", worker.trim_end_matches('/'));
+    let res = http.post(url).json(&body).send().await.map_err(|e| CliError::Route(e.to_string()))?;
+    let status = res.status();
+    if !status.is_success() {
+        return Err(CliError::Route(format!("push registration: {status}: {}", res.text().await.unwrap_or_default())));
+    }
+    Ok(push_id)
+}
+
+/// Výhradní zámek souboru konverzace nebo klíčů. Dva procesy nad stejným stavem ratchetu by jeden druhému přepsaly
+/// stav a stejný klíč zprávy by se použil dvakrát; zámek drží, dokud žije vrácený `File`. Zamyká se vedlejší
+/// `<soubor>.lock`, protože ukládání soubor nahrazuje přejmenováním (zámek na starém souboru by nic nechránil).
+pub fn lock_file(path: &std::path::Path) -> Result<std::fs::File, CliError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut name = path.as_os_str().to_owned();
+    name.push(".lock");
+    let lock = std::path::PathBuf::from(name);
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(&lock)
+        .map_err(|e| CliError::Session(format!("{}: {e}", lock.display())))?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => {
+            Err(CliError::Session(format!("{} is in use by another ancord process (e.g. `online`); write there instead", path.display())))
+        }
+        Err(std::fs::TryLockError::Error(e)) => Err(CliError::Session(format!("{}: {e}", path.display()))),
+    }
+}
+
+/// Publikuje profil uživatele na anchory. Vrací počet potvrzení. `pow_bits` musí odpovídat požadavku nodů.
+/// Klíče je nutné uložit **před** voláním: profil obsahuje prekeys, jejichž tajné části musí přežít restart.
+pub async fn publish_profile(ws: &mut NodeSocket, keys: &UserKeys, pow_bits: u32) -> Result<u64, CliError> {
+    // hashcash je výpočetně náročný, nesmí blokovat reaktor
+    let ts = now_s();
+    let state = keys.to_json();
+    let profile = tokio::task::spawn_blocking(move || UserKeys::from_json(&state).map(|k| k.profile(ts, pow_bits)))
+        .await
+        .map_err(|e| CliError::Connection(e.to_string()))?
+        .ok_or_else(|| CliError::Session("malformed keys".into()))?;
+    let mut request = profile.to_json();
+    request["t"] = json!("profile_put");
+    Ok(rpc(ws, request).await?.get("acks").and_then(Value::as_u64).unwrap_or(0))
+}
+
+/// Najde profil podle adresy a ověří podpis i to, že patří právě této adrese.
+pub async fn lookup_profile(ws: &mut NodeSocket, pk: &[u8; 32]) -> Result<Profile, CliError> {
+    let reply = rpc(ws, json!({"t": "profile_get", "pk": b64u_encode(pk)})).await?;
+    let profile = Profile::from_json(&reply).ok_or_else(|| CliError::Session("malformed profile".into()))?;
+    if !ancord_node::profile::is_for(&profile, pk) {
+        return Err(CliError::Session("profile does not belong to the requested address".into()));
+    }
+    Ok(profile)
+}
+
+/// Dá protistraně vědět, že píšeme (`on`) nebo přestali jsme (spec §15.5).
+pub async fn send_typing(ws: &mut NodeSocket, session: &Session, on: bool) -> Result<(), CliError> {
+    rpc(ws, json!({"t": "typing", "mailbox_id": b64u_encode(&session.outbox()), "on": on})).await.map(|_| ())
+}
+
+/// Stav odeslaných zpráv: `pending`, `delivered` nebo `unknown` (spec §15.6), ve stejném pořadí jako `ids`.
+pub async fn message_status(ws: &mut NodeSocket, session: &Session, ids: &[[u8; 16]]) -> Result<Vec<String>, CliError> {
+    let list: Vec<String> = ids.iter().map(|i| b64u_encode(i)).collect();
+    let reply = rpc(ws, json!({"t": "status", "mailbox_id": b64u_encode(&session.outbox()), "ids": list})).await?;
+    Ok(reply["states"].as_array().map_or_else(Vec::new, |a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()))
+}
+
+/// Přihlásí odběr více příchozích mailboxů najednou (spec §15.8).
+pub async fn subscribe_many(ws: &mut NodeSocket, sessions: &[&Session]) -> Result<(), CliError> {
+    let ids: Vec<String> = sessions.iter().map(|s| b64u_encode(&s.inbox())).collect();
+    rpc(ws, json!({"t": "subscribe", "mailbox_ids": ids})).await.map(|_| ())
+}
+
+/// Zahájí konverzaci podle adresy (spec §15.4): najde a ověří profil, provede X3DH a pošle příjemci obálku do jeho
+/// schránky. Vrací konverzaci; zprávy lze posílat hned, čekají v mailboxu, dokud příjemce obálku nezpracuje.
+pub async fn start_conversation(ws: &mut NodeSocket, keys: &UserKeys, peer: &[u8; 32]) -> Result<Session, CliError> {
+    let profile = lookup_profile(ws, peer).await?;
+    let initiation = keys.initiate(&profile, now_s()).map_err(|e| CliError::Session(e.to_string()))?;
+    let mut id = [0u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut id);
+    // `push_id` schránky z profilu: offline příjemce se o nové konverzaci dozví pushem (spec §15.11)
+    let request = json!({
+        "t": "send", "id": b64u_encode(&id), "mailbox_id": b64u_encode(&inbox_id(peer)), "ts": now_s(),
+        "ct": b64u_encode(&initiation.envelope), "push_id": profile.push_id,
+    });
+    rpc(ws, request).await?;
+    let mut session = Session::from_pairwise(&initiation.pairwise)?;
+    session.peer = Some(b64u_encode(peer));
+    Ok(session)
+}
+
+/// Nová konverzace, kterou si protistrana vyžádala.
+pub struct Accepted {
+    pub peer: [u8; 32],
+    pub session: Session,
+}
+
+/// Zpracované obálky ze schránky.
+#[derive(Default)]
+pub struct InboxBatch {
+    pub accepted: Vec<Accepted>,
+    /// Obálky, které se mají potvrdit (poškozené nebo zpracované). Potvrdit až po uložení klíčů a konverzací.
+    pub done: Vec<String>,
+    /// Obálky, které nešlo zpracovat teď (např. profil odesílatele zatím není k nalezení), zůstávají ve schránce.
+    pub postponed: usize,
+}
+
+/// Vyzvedne úvodní obálky ze schránky uživatele a dokončí dohodu. Použité jednorázové prekeys se v `keys` smažou:
+/// volající musí klíče **uložit** a teprve pak zavolat `ack_inbox`.
+pub async fn process_inbox(ws: &mut NodeSocket, keys: &mut UserKeys) -> Result<InboxBatch, CliError> {
+    let inbox = inbox_id(&keys.pk());
+    let reply = rpc(ws, json!({"t": "fetch", "mailbox_id": b64u_encode(&inbox), "limit": 500})).await?;
+    let mut batch = InboxBatch::default();
+    let mut seen = std::collections::HashSet::new();
+    for m in reply["messages"].as_array().map_or(&[][..], Vec::as_slice) {
+        let (Some(id), Some(env)) = (m["id"].as_str(), m["ct"].as_str().and_then(ancord_node::encoding::b64u_decode)) else { continue };
+        let opened: Opened = match keys.open_envelope(&env) {
+            Ok(o) => o,
+            // cizí, poškozené nebo zastaralé: nikdy nebude platné, uvolní se místo ve schránce
+            Err(_) => {
+                batch.done.push(id.to_owned());
+                continue;
+            }
+        };
+        if !seen.insert(opened.peer_pk) {
+            batch.done.push(id.to_owned());
+            continue;
+        }
+        let Ok(profile) = lookup_profile(ws, &opened.peer_pk).await else {
+            batch.postponed += 1;
+            continue;
+        };
+        // neplatnou obálku (i s nepoužitelným ratchet klíčem) potvrdíme a zahodíme, aby neblokovala schránku
+        if let Some(mut session) = keys.accept(&opened, &profile).ok().and_then(|pair| Session::from_pairwise(&pair).ok()) {
+            session.peer = Some(b64u_encode(&opened.peer_pk));
+            batch.accepted.push(Accepted { peer: opened.peer_pk, session });
+        }
+        batch.done.push(id.to_owned());
+    }
+    Ok(batch)
+}
+
+/// Potvrdí zpracované obálky (uvolní schránku).
+pub async fn ack_inbox(ws: &mut NodeSocket, keys: &UserKeys, done: &[String]) -> Result<(), CliError> {
+    if done.is_empty() {
+        return Ok(());
+    }
+    rpc(ws, json!({"t": "ack", "mailbox_id": b64u_encode(&inbox_id(&keys.pk())), "ids": done})).await.map(|_| ())
+}
+
+/// Bezpečnostní číslo s protistranou k porovnání mimo síť (spec §15.2).
+pub fn safety(keys: &UserKeys, peer: &[u8; 32]) -> String {
+    ancord_node::user::safety_number(&keys.pk(), peer)
 }

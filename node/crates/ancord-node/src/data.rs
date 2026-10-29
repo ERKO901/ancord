@@ -12,7 +12,7 @@ use crate::encoding::{b64u_decode, b64u_decode_array, b64u_encode};
 use crate::hrw;
 use crate::n2n;
 use crate::state::NodeState;
-use crate::store::{PutOutcome, Record, StoreError};
+use crate::store::{MsgState, PutOutcome, Record, StoreError};
 use crate::ticket::{DirectoryBody, DirectoryNode};
 use crate::time::unix_now;
 use crate::presence;
@@ -38,6 +38,10 @@ pub enum DataError {
     QuorumUnavailable,
     #[error("mailbox is full")]
     MailboxFull,
+    #[error("not found")]
+    NotFound,
+    #[error("invalid signature or proof of work")]
+    InvalidProof,
     #[error("storage failure")]
     Storage,
 }
@@ -52,6 +56,8 @@ impl DataError {
             Self::InsufficientNodes => "insufficient_nodes",
             Self::QuorumUnavailable => "quorum_unavailable",
             Self::MailboxFull => "mailbox_full",
+            Self::NotFound => "not_found",
+            Self::InvalidProof => "invalid_proof",
             Self::Storage => "unavailable",
         }
     }
@@ -138,7 +144,7 @@ pub(crate) struct Plan {
 
 impl Plan {
     /// Počet odpovědí, jejichž sjednocení se vždy protne s jakýmkoli zápisem na kvorum.
-    fn read_quorum(&self) -> usize {
+    pub(crate) fn read_quorum(&self) -> usize {
         (self.nodes.len() + 1).saturating_sub(self.quorum).max(1)
     }
 }
@@ -193,7 +199,7 @@ pub fn is_member(st: &NodeState, pubkey: &[u8; 32]) -> bool {
         .any(|d| d.nodes.iter().any(|n| b64u_decode_array::<32>(&n.pk).is_some_and(|pk| &pk == pubkey)))
 }
 
-async fn blocking<T, F>(st: &Arc<NodeState>, f: F) -> Result<T, DataError>
+pub(crate) async fn blocking<T, F>(st: &Arc<NodeState>, f: F) -> Result<T, DataError>
 where
     F: FnOnce(&NodeState) -> Result<T, StoreError> + Send + 'static,
     T: Send + 'static,
@@ -226,6 +232,45 @@ pub async fn ack_local(st: &Arc<NodeState>, mailbox_id: [u8; 32], ids: Vec<[u8; 
     let now = unix_now();
     let exp = now.saturating_add(st.cfg.message_ttl_s);
     blocking(st, move |s| s.store.ack(&mailbox_id, &ids, now, exp)).await
+}
+
+pub async fn status_local(st: &Arc<NodeState>, mailbox_id: [u8; 32], ids: Vec<[u8; 16]>) -> Result<Vec<MsgState>, DataError> {
+    let now = unix_now();
+    blocking(st, move |s| s.store.states(&mailbox_id, &ids, now)).await
+}
+
+/// Stav zpráv podle odpovědí nejméně `r − quorum + 1` anchorů; „doručeno“ vyhrává nad „čeká“ a to nad „neznámé“.
+pub async fn status(st: &Arc<NodeState>, mailbox_id: [u8; 32], ids: Vec<[u8; 16]>) -> Result<Vec<MsgState>, DataError> {
+    let plan = plan(st, &mailbox_id)?;
+    let need = plan.read_quorum();
+    let count = ids.len();
+    let ids = Arc::new(ids);
+    let mut rx = fan_out(st, plan.nodes, move |st, node, is_self| {
+        let ids = ids.clone();
+        async move {
+            if is_self {
+                return status_local(&st, mailbox_id, ids.to_vec()).await.map_err(local);
+            }
+            let list: Vec<String> = ids.iter().map(|i| b64u_encode(i)).collect();
+            let answer = peer_post(&st, &node, "/n/status", &json!({"mailbox_id": b64u_encode(&mailbox_id), "ids": list})).await?;
+            let states: Option<Vec<MsgState>> =
+                answer["states"].as_array().and_then(|a| a.iter().map(|v| v.as_str().and_then(MsgState::parse)).collect());
+            states.filter(|s| s.len() == ids.len()).ok_or_else(|| OpError::Failed("malformed states".into()))
+        }
+    });
+    let (mut answers, mut merged) = (0, vec![MsgState::Unknown; count]);
+    while let Some(result) = rx.recv().await {
+        if let Ok(list) = result {
+            answers += 1;
+            for (m, s) in merged.iter_mut().zip(list) {
+                *m = (*m).max(s);
+            }
+            if answers >= need {
+                return Ok(merged);
+            }
+        }
+    }
+    Err(DataError::QuorumUnavailable)
 }
 
 #[derive(Debug)]
@@ -448,5 +493,6 @@ pub async fn handoff(st: &Arc<NodeState>) -> bool {
             all_ok = false;
         }
     }
+    all_ok &= crate::profile::handoff(st).await;
     all_ok
 }

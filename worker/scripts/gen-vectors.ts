@@ -3,7 +3,6 @@
  * Spuštění: npm run vectors. Výsledek je v gitu; test/vectors.test.ts hlídá, že ho kód stále splňuje.
  * Vektory musí projít i node (Rust) – proto jsou vstupy pevné a podpisy deterministické (Ed25519).
  */
-import { createCipheriv, hkdfSync } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,48 +32,6 @@ async function keyOf(seed: Uint8Array) {
 function write(name: string, data: unknown): void {
   writeFileSync(join(out, name), JSON.stringify(data, null, 2) + "\n");
   console.log("wrote", name);
-}
-
-/** Referenční ratchet (spec §13.2), nezávislý na Rustu: node:crypto místo knihoven nodu. */
-function hkdf(ikm: Uint8Array, salt: Uint8Array, info: string, len: number): Uint8Array {
-  return new Uint8Array(hkdfSync("sha256", ikm, salt, utf8(info), len));
-}
-
-function ratchetVectors(): unknown {
-  const ss = sha256(utf8("pairing-secret"));
-  const be32 = (n: number) => new Uint8Array([(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]);
-  const plaintexts = ["ahoj", "", "zpráva č. 3 \u{1F512}"];
-  const dirs = ["i2r", "r2i"].map((dir) => {
-    const mailbox = sha256(concat(utf8("ancord/v1/mailbox"), new Uint8Array([0]), ss, new Uint8Array([0]), utf8(dir)));
-    let ck = hkdf(ss, utf8("ancord/v1/ratchet"), `chain\u0000${dir}`, 32);
-    const ck0 = ck;
-    const messages = plaintexts.map((text, n) => {
-      const id = sha256(utf8(`${dir}-message-${n}`)).subarray(0, 16);
-      const mk = hkdf(ck, new Uint8Array(0), "ancord/v1/ratchet/msg", 44);
-      const aad = concat(utf8("ancord/v1/msg"), new Uint8Array([0]), mailbox, id, be32(n));
-      const cipher = createCipheriv("chacha20-poly1305", mk.subarray(0, 32), mk.subarray(32, 44), { authTagLength: 16 });
-      cipher.setAAD(aad, { plaintextLength: utf8(text).length });
-      const body = concat(new Uint8Array(cipher.update(utf8(text))), new Uint8Array(cipher.final()), new Uint8Array(cipher.getAuthTag()));
-      ck = hkdf(ck, new Uint8Array(0), "ancord/v1/ratchet/chain", 32);
-      return {
-        n,
-        id: b64uEncode(id),
-        plaintext_b64: b64uEncode(utf8(text)),
-        key_hex: toHex(mk.subarray(0, 32)),
-        nonce_hex: toHex(mk.subarray(32, 44)),
-        aad_hex: toHex(aad),
-        ct: b64uEncode(concat(be32(n), body)),
-        next_chain_key_hex: toHex(ck),
-      };
-    });
-    return { dir, mailbox_id: b64uEncode(mailbox), chain_key_0_hex: toHex(ck0), messages };
-  });
-  return {
-    description: "Mailbox a ratchet (spec §13.1 a §13.2): HKDF-SHA256 + ChaCha20-Poly1305, vygenerováno přes node:crypto",
-    shared_secret: b64uEncode(ss),
-    max_skip: 200,
-    dirs,
-  };
 }
 
 async function main() {
@@ -237,7 +194,7 @@ async function main() {
     openings: [3, 9, 15].map((i) => makeOpening(spaceSeed, table, levels, i)),
   });
 
-  write("ratchet.json", ratchetVectors());
+  // ratchet.json a pairwise.json generují Pythonové reference v spec/reference/ (X25519 a Double Ratchet)
 
   const pushKey = await keyOf(seedOf(5));
   const pushId = pushIdOf(pushKey.pub);

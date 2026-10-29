@@ -151,5 +151,9 @@ export class RealPushSender implements PushSender {
 }
 
 export function createPushSender(env: Env): PushSender {
+  // log mimo profil dev by push v produkci potichu zahazoval
+  if (env.PROFILE !== "dev" && env.PUSH_MODE !== "real") {
+    throw new Error(`PUSH_MODE must be 'real' outside the dev profile (PROFILE=${env.PROFILE})`);
+  }
   return env.PUSH_MODE === "real" ? new RealPushSender(env) : new LogPushSender();
 }

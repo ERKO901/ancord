@@ -287,27 +287,123 @@ fn hrw() {
     }
 }
 
+/// Deterministický zdroj klíčů: každé použití vrátí další zárodek ze seznamu (stejné pořadí jako v referenčním Pythonu).
+struct SeedRng(std::collections::VecDeque<[u8; 32]>);
+
+impl rand::RngCore for SeedRng {
+    fn next_u32(&mut self) -> u32 {
+        unreachable!("only fill_bytes is used")
+    }
+    fn next_u64(&mut self) -> u64 {
+        unreachable!("only fill_bytes is used")
+    }
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        let seed = self.0.pop_front().expect("the vector provides enough key seeds");
+        dest.copy_from_slice(&seed);
+    }
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
+        self.fill_bytes(dest);
+        Ok(())
+    }
+}
+
+impl rand::CryptoRng for SeedRng {}
+
 #[test]
 fn ratchet() {
-    use ancord_node::ratchet::{mailbox_id, Direction, Receiver, Sender};
+    use ancord_node::ratchet::{bootstrap_secret, mailbox_id, Direction, Ratchet};
+    use x25519_dalek::{PublicKey, StaticSecret};
     let v = load("ratchet.json");
     let ss: [u8; 32] = b64u_decode_array(s(&v, "shared_secret")).unwrap();
     assert_eq!(v["max_skip"].as_u64().unwrap(), u64::from(ancord_node::ratchet::MAX_SKIP));
-    for d in v["dirs"].as_array().unwrap() {
-        let dir = match s(d, "dir") {
-            "i2r" => Direction::InitiatorToResponder,
-            _ => Direction::ResponderToInitiator,
-        };
-        assert_eq!(b64u_encode(&mailbox_id(&ss, dir)), s(d, "mailbox_id"));
-        let mut tx = Sender::new(&ss, dir);
-        let mut rx = Receiver::new(&ss, dir);
-        for m in d["messages"].as_array().unwrap() {
-            let id: [u8; 16] = b64u_decode_array(s(m, "id")).unwrap();
-            let plaintext = b64u_decode(s(m, "plaintext_b64")).unwrap();
-            // odesílatel musí vyrobit přesně stejné bajty jako referenční implementace
-            assert_eq!(tx.seal(&id, &plaintext).unwrap(), s(m, "ct"));
-            // příjemce referenční ciphertext otevře
-            assert_eq!(rx.open(&id, s(m, "ct")).unwrap(), plaintext);
+    assert_eq!(b64u_encode(&mailbox_id(&ss, Direction::InitiatorToResponder)), s(&v["mailboxes"], "i2r"));
+    assert_eq!(b64u_encode(&mailbox_id(&ss, Direction::ResponderToInitiator)), s(&v["mailboxes"], "r2i"));
+    assert_eq!(b64u_encode(&bootstrap_secret(&ss).to_bytes()), s(&v, "bootstrap_seed"));
+    let seeds = |who: &str| -> std::collections::VecDeque<[u8; 32]> {
+        v["key_seeds"][who].as_array().unwrap().iter().map(|k| b64u_decode_array(k.as_str().unwrap()).unwrap()).collect()
+    };
+    let spk_secret = StaticSecret::from(b64u_decode_array::<32>(s(&v, "responder_ratchet_seed")).unwrap());
+
+    for scenario in v["scenarios"].as_array().unwrap() {
+        let name = s(scenario, "name");
+        let (mut a_rng, mut b_rng) = (SeedRng(seeds("a")), SeedRng(seeds("b")));
+        let responder_key = if name == "shared-secret" { bootstrap_secret(&ss) } else { spk_secret.clone() };
+        let mut a = Ratchet::initiator_with_rng(&ss, &PublicKey::from(&responder_key).to_bytes(), &mut a_rng).unwrap();
+        let mut b = Ratchet::responder(&ss, &responder_key);
+        let mut sent: Vec<([u8; 16], String)> = Vec::new();
+        for (i, step) in scenario["steps"].as_array().unwrap().iter().enumerate() {
+            let (me, rng) = if s(step, "who") == "a" { (&mut a, &mut a_rng) } else { (&mut b, &mut b_rng) };
+            let plaintext = b64u_decode(s(step, "plaintext_b64")).unwrap();
+            if s(step, "op") == "send" {
+                let id: [u8; 16] = b64u_decode_array(s(step, "id")).unwrap();
+                // odesílatel musí vyrobit přesně stejné bajty jako referenční implementace
+                assert_eq!(me.seal(&id, &plaintext).unwrap(), s(step, "ct"), "{name} step {i}");
+                sent.push((id, s(step, "ct").to_owned()));
+            } else {
+                let (id, ct) = &sent[step["message"].as_u64().unwrap() as usize];
+                let (seq, got) = me.open_numbered_with_rng(id, ct, rng).unwrap();
+                assert_eq!(got, plaintext, "{name} step {i}");
+                assert_eq!(u64::from(seq), step["seq"].as_u64().unwrap(), "{name} step {i}");
+            }
         }
     }
+}
+
+#[test]
+fn pairwise() {
+    use ancord_node::profile::{profile_id, Profile};
+    use ancord_node::ratchet::{mailbox_id, Direction};
+    use ancord_node::user::{inbox_id, mailbox_push_key, safety_number, UserKeys};
+    use ancord_node::wake::push_id_of;
+    use x25519_dalek::StaticSecret;
+    let v = load("pairwise.json");
+    let bits = u32::try_from(v["pow_bits"].as_u64().unwrap()).unwrap();
+    let now = v["now"].as_u64().unwrap();
+    let seed = |x: &Value, k: &str| -> [u8; 32] { b64u_decode_array(s(x, k)).unwrap() };
+    let (alice, bob) = (&v["alice"], &v["bob"]);
+    let otk_seeds: Vec<[u8; 32]> = bob["otk_seeds"].as_array().unwrap().iter().map(|o| b64u_decode_array(o.as_str().unwrap()).unwrap()).collect();
+
+    // Alice: žádný prekey nepotřebuje k odeslání, její profil ale musí projít ověřením a odpovídat klíčům
+    let alice_keys = UserKeys::from_parts(seed(alice, "uk_seed"), seed(alice, "ik_seed"), [9; 32], now, &[], seed(alice, "push_seed"));
+    let alice_profile = Profile::from_json(&alice["profile"]).unwrap();
+    alice_profile.check(now, bits).unwrap();
+    assert_eq!(alice_keys.profile(now, bits), alice_profile, "Ed25519 is deterministic, so the profile is byte-identical");
+
+    let mut bob_keys = UserKeys::from_parts(seed(bob, "uk_seed"), seed(bob, "ik_seed"), seed(bob, "spk_seed"), now, &otk_seeds, seed(bob, "push_seed"));
+    assert_eq!(bob_keys.push_id(), bob_profile_push_id(bob));
+    let bob_profile = Profile::from_json(&bob["profile"]).unwrap();
+    bob_profile.check(now, bits).unwrap();
+    assert_eq!(bob_keys.profile(now, bits), bob_profile);
+    assert_eq!(b64u_encode(&profile_id(&bob_keys.pk())), b64u_encode(&profile_id(&bob_profile.pk)));
+    assert_eq!(b64u_encode(&inbox_id(&bob_keys.pk())), s(bob, "inbox_id"));
+
+    // X3DH a obálka: stejné tajemství i stejné bajty obálky jako v nezávislém Pythonu
+    let h = &v["handshake"];
+    let ek = StaticSecret::from(seed(h, "ek_seed"));
+    let index = usize::try_from(h["otk_index"].as_u64().unwrap()).unwrap();
+    let init = alice_keys.initiate_with(&bob_profile, now, &ek, Some(index)).unwrap();
+    assert_eq!(b64u_encode(&init.pairwise.secret), s(h, "secret"));
+    assert_eq!(b64u_encode(&init.envelope), s(h, "envelope"));
+
+    let opened = bob_keys.open_envelope(&b64u_decode(s(h, "envelope")).unwrap()).unwrap();
+    assert_eq!(opened.peer_pk, alice_keys.pk());
+    let accepted = bob_keys.accept(&opened, &alice_profile).unwrap();
+    assert_eq!(b64u_encode(&accepted.secret), s(h, "secret"));
+    assert_eq!(bob_keys.otk_count(), 1, "the used one-time prekey is deleted");
+
+    assert_eq!(safety_number(&alice_keys.pk(), &bob_keys.pk()), s(&v, "safety_number"));
+
+    // push klíče mailboxů konverzace (§15.11)
+    for dir in [Direction::InitiatorToResponder, Direction::ResponderToInitiator] {
+        let p = &v["mailbox_push"][dir.as_str()];
+        let mailbox = mailbox_id(&accepted.secret, dir);
+        assert_eq!(b64u_encode(&mailbox), s(p, "mailbox_id"));
+        let key = mailbox_push_key(&accepted.secret, &mailbox);
+        assert_eq!(b64u_encode(&key.to_bytes()), s(p, "push_seed"));
+        assert_eq!(push_id_of(&key.verifying_key().to_bytes()), s(p, "push_id"));
+    }
+}
+
+fn bob_profile_push_id(bob: &Value) -> &str {
+    s(&bob["profile"], "push_id")
 }

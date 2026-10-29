@@ -16,6 +16,9 @@ use crate::sysinfo::LoadMeter;
 use crate::ticket::{DirectoryBody, TicketGuard};
 use crate::worker::WorkerClient;
 
+/// Poslední předaný signál psaní podle `(mailbox_id, role)`: stav a čas.
+pub type TypingState = HashMap<([u8; 32], u8), (bool, u64)>;
+
 pub struct NodeState {
     pub cfg: Config,
     pub identity: Identity,
@@ -47,6 +50,8 @@ pub struct NodeState {
     pub presence: Mutex<HashMap<[u8; 32], PresenceEntry>>,
     /// Odběratelé z připojených klientů: tento node je jejich gateway.
     pub subscribers: Mutex<HashMap<[u8; 32], Subscribers>>,
+    /// Kdy a s jakým stavem se naposledy předal signál psaní daného mailboxu (koalescence, spec §15.5).
+    pub typing_last: Mutex<TypingState>,
     /// Čítač spojení klientů (identifikace odběratelů).
     pub next_conn: AtomicU64,
     /// Session node↔node, které tento node drží jako responder (`/n/hs`).
@@ -84,6 +89,7 @@ impl NodeState {
             wake_last: Mutex::new(HashMap::new()),
             presence: Mutex::new(HashMap::new()),
             subscribers: Mutex::new(HashMap::new()),
+            typing_last: Mutex::default(),
             next_conn: AtomicU64::new(0),
             n2n_in: Mutex::default(),
             n2n_out: Mutex::default(),
