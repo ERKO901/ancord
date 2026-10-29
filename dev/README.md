@@ -7,8 +7,13 @@ Image `ancord-node` (`../node/Dockerfile`) obsahuje node i `cloudflared` (pevná
 
 Kontejnery běží jako neprivilegovaný uživatel, s read-only kořenovým systémem souborů, bez capabilities a s `no-new-privileges`. `docker stop` node ukončí čistě (SIGTERM).
 
+### Požadavky na server
+Docker s Compose v2, odchozí HTTPS a odchozí spojení `cloudflared` na Cloudflare (port 7844, QUIC/UDP s fallbackem na TCP). Žádná veřejná IP ani otevřený port. Profil `prod` dává každému nodu Proof of Space ~4 GB na disku (`space-storage.*` ve volume), šest nodů tedy potřebuje ~25 GB.
+
+Po prvním startu trvá 1–2 minuty, než Cloudflare začne směrovat na nový tunel (do té doby `530`, node aktivaci sám opakuje), a node se objeví v adresáři až na začátku další epochy (`prod`: 300 s). Do té doby klient dostane `insufficient_nodes`.
+
 ### Postup
-Na stroji, kde poběží nody (potřebuje jen Docker a odchozí HTTPS):
+Na stroji, kde poběží nody:
 ```
 cp dev/.env.example dev/.env
 dev/bootstrap.sh             # vytvoří klíče 6 nodů ve volume a zapíše jejich node_id do dev/genesis.txt
