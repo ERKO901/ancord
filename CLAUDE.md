@@ -33,7 +33,7 @@ Ve fázích A a B nic nenasazuj, nevytvářej nic v Cloudflare a nečti `.env`. 
 
 ## Cloudflare (firemní zóna melonet.cz)
 - Worker: `ancord.melonet.cz`, nody: `node<id>.melonet.cz` (jedna úroveň pod zónou).
-- Přihlašovací údaje jsou v `/home/erko/code/.env` (`SECRET_CF`, `ACC_ID`). Soubor nikdy nevypisuj, nekopíruj do projektu ani necommituj.
+- Přihlašovací údaje jsou v proměnných prostředí `CLOUDFLARE_API_TOKEN` a `CLOUDFLARE_ACCOUNT_ID`. Hodnoty nikdy nevypisuj.
 - Zóna je sdílená s existujícími službami: před zápisem přečti existující DNS záznamy, měň jen záznamy s prefixem `node` a `ancord`, nic jiného. Před každým krokem, který v Cloudflare něco vytváří nebo nasazuje, počkej na potvrzení uživatele.
 
 ## Příkazy
