@@ -1,0 +1,10 @@
+# wry vkládá tuto hodnotu do těla třídy RustWebView (Android). Klávesnice nesmí
+# z textu zpráv a hesel „se učit“ (IME_FLAG_NO_PERSONALIZED_LEARNING, ARCHITECTURE.md §13.14).
+[env]
+WRY_RUSTWEBVIEW_CLASS_EXTENSION = """
+    override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo): android.view.inputmethod.InputConnection? {
+        val connection = super.onCreateInputConnection(outAttrs)
+        outAttrs.imeOptions = outAttrs.imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+        return connection
+    }
+"""

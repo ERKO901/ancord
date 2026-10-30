@@ -57,7 +57,7 @@ class MainActivity : TauriActivity() {
   }
 
   // Autofill a ukládání formulářů se u WebView vypíná celé: hesla ani text zpráv nemají skončit u cizí služby.
-  // Klávesnici „bez učení“ (IME_FLAG_NO_PERSONALIZED_LEARNING) tu nenastavíme, WebView vytváří wry; viz ARCHITECTURE.md §13.14.
+  // Klávesnice „bez učení“ (IME_FLAG_NO_PERSONALIZED_LEARNING) se nastavuje v RustWebView přes .cargo/config.toml (wry class extension).
   override fun onWebViewCreate(webView: WebView) {
     this.webView = webView
     webView.addJavascriptInterface(ScanBridge(), "AncordScan")
