@@ -195,6 +195,8 @@ fn classify(e: &CliError) -> ConnectionIssue {
     match e {
         CliError::Route(m) if m.starts_with(|c: char| c.is_ascii_digit()) || m.starts_with("unexpected response") => ConnectionIssue::WorkerError,
         CliError::Route(_) => ConnectionIssue::WorkerUnreachable,
+        CliError::Admission { reason, .. } if reason.contains("protocol mismatch") => ConnectionIssue::ProtocolMismatch,
+        CliError::AllFailed(m) if m.contains("protocol mismatch") => ConnectionIssue::ProtocolMismatch,
         CliError::Admission { reason, .. } if reason.contains("untrusted route") => ConnectionIssue::RouteUntrusted,
         CliError::AllFailed(m) if m.contains("untrusted route") => ConnectionIssue::RouteUntrusted,
         CliError::Node { .. } => ConnectionIssue::NodeRejected,

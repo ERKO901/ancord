@@ -4,7 +4,7 @@
 export type DeliveryState = "queued" | "pending" | "delivered" | "unknown";
 export type ConnectionState = "offline" | "connecting" | "online";
 /** Proč spojení nejde (`null` = bez problému). */
-export type ConnectionIssue = "worker_unreachable" | "worker_error" | "route_untrusted" | "node_unreachable" | "node_rejected";
+export type ConnectionIssue = "worker_unreachable" | "worker_error" | "route_untrusted" | "node_unreachable" | "node_rejected" | "protocol_mismatch";
 export type ThemeChoice = "system" | "dark" | "light";
 export type IdentityState = "none" | "locked" | "ready";
 

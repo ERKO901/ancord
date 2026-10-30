@@ -175,7 +175,7 @@ async fn recv_plain(socket: &mut WebSocket, timeout: Duration) -> Option<Value> 
 async fn establish(st: &Arc<NodeState>, mut socket: WebSocket) -> Option<Secure> {
     let timeout = Duration::from_secs(st.cfg.auth_timeout_s);
     let challenge = channel::random_array::<32>();
-    let hello = json!({"t": "hello", "node_id": st.identity.node_id(), "challenge": b64u_encode(&challenge)});
+    let hello = json!({"t": "hello", "v": ancord_core::PROTOCOL_VERSION, "node_id": st.identity.node_id(), "challenge": b64u_encode(&challenge)});
     socket.send(Message::text(hello.to_string())).await.ok()?;
 
     let init = recv_plain(&mut socket, timeout).await?;

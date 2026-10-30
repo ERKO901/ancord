@@ -30,6 +30,7 @@ const issueLabel = {
   route_untrusted: "Trasa se nepodařilo ověřit",
   node_unreachable: "Offline: žádný uzel neodpovídá",
   node_rejected: "Uzel odmítl požadavek (nejspíš starší verze)",
+  protocol_mismatch: "Uzly mají jinou verzi protokolu, aktualizujte aplikaci",
 } as const;
 
 /** Text stavu spojení; v offline přidá důvod posledního selhání. */

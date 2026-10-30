@@ -304,6 +304,7 @@ async fn three_nodes_register_challenge_route_and_admit() {
     let (mut raw, _) = tokio_tungstenite::connect_async(url_for(&a.hostname)).await.unwrap();
     let hello = raw.next().await.unwrap().unwrap();
     assert!(hello.to_text().unwrap().contains("hello"));
+    assert!(hello.to_text().unwrap().contains(&format!("\"v\":{}", ancord_core::PROTOCOL_VERSION)));
     match tokio::time::timeout(Duration::from_secs(10), raw.next()).await.unwrap() {
         Some(Ok(Message::Close(Some(f)))) => assert_eq!(u16::from(f.code), 4408),
         other => panic!("expected close 4408, got {other:?}"),

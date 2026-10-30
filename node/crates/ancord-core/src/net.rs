@@ -173,6 +173,12 @@ pub async fn admit_unchecked(url: &str, node: &RouteNode, ek: &SigningKey) -> Re
     if hello["t"] != "hello" || hello["node_id"] != node.node_id.as_str() {
         return Err(admission(&node.node_id, "unexpected hello"));
     }
+    // `hello` bez `v` je starý node (před verzováním): nesoulad se pozná hned, ne až po první zprávě
+    match hello["v"].as_u64() {
+        Some(v) if v == u64::from(crate::PROTOCOL_VERSION) => {}
+        Some(v) => return Err(admission(&node.node_id, format!("protocol mismatch: node v{v}, client v{}", crate::PROTOCOL_VERSION))),
+        None => return Err(admission(&node.node_id, format!("protocol mismatch: node without version, client v{}", crate::PROTOCOL_VERSION))),
+    }
     let challenge = hello["challenge"].as_str().and_then(b64u_decode_array::<32>).ok_or_else(|| admission(&node.node_id, "bad challenge"))?;
 
     let ce = Ephemeral::generate();

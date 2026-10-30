@@ -109,6 +109,8 @@ pub enum ConnectionIssue {
     NodeUnreachable,
     /// Node odmítl požadavek klienta (nejspíš nesoulad verzí protokolu).
     NodeRejected,
+    /// Node mluví jinou verzí protokolu než klient (poznáno v admission, před první zprávou).
+    ProtocolMismatch,
 }
 
 /// Události Rust → UI (`Events` v `types.ts`). Název události je `UiEvent::name`, tělo je varianta bez obalu.

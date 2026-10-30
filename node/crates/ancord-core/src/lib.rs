@@ -2,6 +2,10 @@
 //! Double Ratchet, šifrovaný kanál, profil a stráž schránky. Žádné serverové závislosti (HTTP server, redb, sysinfo).
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+/// Verze protokolu (`spec/PROTOCOL.md` §8.1). Node ji oznamuje v `hello`, klient ji porovná před výměnou klíčů.
+/// Zvyšuje se při změně, se kterou starší druhá strana nepracuje.
+pub const PROTOCOL_VERSION: u32 = 1;
+
 pub mod canonical;
 pub mod channel;
 pub mod encoding;
