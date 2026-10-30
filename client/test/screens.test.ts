@@ -69,6 +69,19 @@ describe("obrazovky (D4: každá se vykreslí a reaguje)", () => {
     expect(app.messages[app.messages.length - 1]?.text).toBe("ahoj světe");
   });
 
+  it("konverzace s 10 000 zprávami se otevře do rozpočtu (§13.11)", async () => {
+    await start({ stressMessages: 10_000 });
+    const t0 = performance.now();
+    await click("Zátěž");
+    const total = performance.now() - t0;
+    const rendered = document.querySelectorAll("article.msg").length;
+    console.log(`otevření 10 000 zpráv: ${total.toFixed(0)} ms (včetně ${8 * 15} ms čekání settle), vykresleno ${rendered}`);
+    expect(rendered).toBeGreaterThan(0);
+    expect(rendered).toBeLessThan(100);
+    // settle() čeká pevných 120 ms; rozpočet 150 ms se měří nad ním
+    expect(total - 8 * 15).toBeLessThan(150);
+  });
+
   it("zprávy jsou čistý text: HTML se nevykreslí", async () => {
     await start();
     await click("Alice");

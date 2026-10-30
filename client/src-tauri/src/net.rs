@@ -147,6 +147,39 @@ async fn run(shared: Shared, config: Arc<NetConfig>, sink: Arc<dyn Sink>, mut rx
     }
 }
 
+/// Výchozí tvrdý limit `sync_once` (§13.4).
+#[allow(dead_code, reason = "viz Core::sync_once")]
+pub const SYNC_LIMIT: Duration = Duration::from_secs(20);
+
+/// Jednorázové vyzvednutí po wake (§13.4): `/route` → připojení → `attach` (profil, odběry, `fetch`) → odpojení.
+/// Zpráva se uloží (včetně stavu ratchetu) dřív, než `Online` pošle `ack`; po vypršení `limit` se zahodí jen
+/// rozpracované čekání na síť, nic potvrzeného se neztratí. Vrací počet přijatých zpráv.
+/// Smí běžet jen tam, kde neběží `Link` (jeden vlastník stavu ratchetu).
+#[allow(dead_code, reason = "viz Core::sync_once")]
+pub(crate) async fn sync_once(shared: Shared, config: &NetConfig, sink: Arc<dyn Sink>, limit: Duration) -> Result<usize, CliError> {
+    let (keys, sessions) = shared.load_online().map_err(CliError::Session)?;
+    let mut online = Online::new(keys, sessions, config.pow_bits);
+    let mut persist = StorePersist::new(shared);
+    let fetch = async {
+        let http = reqwest::Client::new();
+        let ek = SigningKey::generate(&mut OsRng);
+        let route = fetch_route(&http, &config.worker, &ek.verifying_key().to_bytes()).await?;
+        let (_, ws) = connect_any(&route, &ek, &config.worker_key, |h| config.url_for(h)).await?;
+        Ok::<_, CliError>(ws)
+    };
+    let mut ws = tokio::time::timeout(limit, fetch).await.map_err(|_| CliError::Connection("sync timed out".into()))??;
+    // `attach` se nesmí přerušit uprostřed (viz `Online::handle`), proto limit hlídá jen spojení a samotné čekání
+    let attached = online.attach(&mut ws, &mut persist).await;
+    ws.close().await;
+    attached?;
+    let events = persist.take_events();
+    let received = events.iter().filter(|e| matches!(e, UiEvent::MessageReceived { .. })).count();
+    for e in events {
+        sink.emit(e);
+    }
+    Ok(received)
+}
+
 /// Chyba spojení ukončí spojení (a přijde nové), ostatní (node odmítl, profil nenalezen) jen přeskočí jednu akci.
 fn soft(e: CliError) -> Result<(), CliError> {
     match e {

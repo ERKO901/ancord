@@ -1,8 +1,8 @@
 {
   "ARCHITECTURE.md": {
-    "mtime": 1793346220.217866,
-    "seen": 1793346222.3511312,
-    "ast_hash": "4db23b5949205e9f6b03b944c5911256",
+    "mtime": 1793346907.5195062,
+    "seen": 1793346909.657612,
+    "ast_hash": "fbb071137d6534705daf0ac226948de3",
     "semantic_hash": ""
   },
   "CLAUDE.md": {
@@ -714,9 +714,9 @@
     "semantic_hash": ""
   },
   "client/src-tauri/src/core.rs": {
-    "mtime": 1793344382.375846,
-    "seen": 1793344384.7201934,
-    "ast_hash": "22a03b2f66f82ec2d0f83a602a661070",
+    "mtime": 1793347348.3844383,
+    "seen": 1793347426.5674193,
+    "ast_hash": "2943f2c183cab0f04e2ea2c8726d27b3",
     "semantic_hash": ""
   },
   "client/src-tauri/src/lib.rs": {
@@ -894,9 +894,9 @@
     "semantic_hash": ""
   },
   "client/test/screens.test.ts": {
-    "mtime": 1793316331.4974015,
-    "seen": 1793344384.720218,
-    "ast_hash": "c4f81fb1126ea428a8cc65a3b65a520c",
+    "mtime": 1793346880.418757,
+    "seen": 1793346909.6575022,
+    "ast_hash": "8528d62a5524cde4538f1cc96ab2d086",
     "semantic_hash": ""
   },
   "client/test/setup.ts": {
@@ -1032,9 +1032,9 @@
     "semantic_hash": ""
   },
   "client/README.md": {
-    "mtime": 1793346220.217866,
-    "seen": 1793346222.3511326,
-    "ast_hash": "97e48428233e124745f53d4aed7601b1",
+    "mtime": 1793347424.48176,
+    "seen": 1793347426.567565,
+    "ast_hash": "14a5185b88a0c9ba9d123f5f52b88349",
     "semantic_hash": ""
   },
   "client/index.html": {
@@ -1224,15 +1224,15 @@
     "semantic_hash": ""
   },
   "client/src-tauri/src/e2e.rs": {
-    "mtime": 1793345953.689328,
-    "seen": 1793346222.3510082,
-    "ast_hash": "d63182f259e8e62c5879ec453c6697cc",
+    "mtime": 1793347353.1843956,
+    "seen": 1793347426.5674207,
+    "ast_hash": "094947e2101c0932d2ca0f9af10c836d",
     "semantic_hash": ""
   },
   "client/src-tauri/src/net.rs": {
-    "mtime": 1793344382.375846,
-    "seen": 1793344384.7201967,
-    "ast_hash": "879470593cc12f506892ad18f73ed154",
+    "mtime": 1793347348.3844383,
+    "seen": 1793347426.567424,
+    "ast_hash": "bd81b45edc63b4a277b0ec3c3961d17e",
     "semantic_hash": ""
   },
   "client/test/deps.test.ts": {

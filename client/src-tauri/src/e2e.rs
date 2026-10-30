@@ -297,7 +297,7 @@ fn two_clients_chat_live_offline_and_without_duplicates() {
     assert_eq!(texts(&bob, &alice_at_bob.id), want);
     drop(bob);
     let (bob, rx_b2, sink_b2) = client(dir_b.path());
-    bob.go_online(config, sink_b2).unwrap();
+    bob.go_online(config.clone(), sink_b2).unwrap();
     online(&rx_b2, "Bob again");
     let quiet = Instant::now() + Duration::from_secs(5);
     while let Ok(e) = rx_b2.recv_timeout(quiet.saturating_duration_since(Instant::now())) {
@@ -307,6 +307,16 @@ fn two_clients_chat_live_offline_and_without_duplicates() {
     assert_eq!(texts(&alice, &to_bob.id).len(), 3);
     let list = bob.conversation_list().unwrap();
     assert_eq!((list.len(), list[0].last_text.as_str()), (1, "když jsi byl pryč"));
+
+    // D6: `sync_once` (Android po wake): Bob je offline, vyzvedne zprávu jednorázově, podruhé už nic
+    drop(bob);
+    std::thread::sleep(Duration::from_secs(2));
+    alice.message_send(&to_bob.id, "pro sync_once").unwrap();
+    let (bob, rx_b3, sink_b3) = client(dir_b.path());
+    assert_eq!(bob.sync_once(&config, sink_b3.clone(), crate::net::SYNC_LIMIT).unwrap(), 1);
+    assert_eq!(received(&rx_b3, "message from sync_once"), (alice_at_bob.id.clone(), "pro sync_once".to_string()));
+    assert_eq!(bob.sync_once(&config, sink_b3, crate::net::SYNC_LIMIT).unwrap(), 0, "ack až po uložení, žádná duplicita");
+    assert_eq!(texts(&bob, &alice_at_bob.id).len(), 4);
 
     // D5: za celou dobu klienti mluvili jen s Workerem a s přesměrováním k nodům (`dev/local.sh`), nic jiného
     let allowed = [net.worker.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()).unwrap(), net.forward];

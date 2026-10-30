@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ancord_core::encoding::{b64u_decode_array, b64u_encode, hex_encode};
 use ancord_core::net::{CliError, Session};
@@ -333,6 +333,18 @@ impl Core {
     pub fn go_online(&self, config: NetConfig, sink: Arc<dyn Sink>) -> Result<(), String> {
         *self.network.lock().map_err(|_| lock_err())? = Some((Arc::new(config), sink));
         self.ensure_link()
+    }
+
+    /// Jednorázové vyzvednutí po wake (Android, §13.4): vrací počet přijatých zpráv. Odmítne běžet vedle online
+    /// úlohy (`go_online`), protože stav ratchetu smí měnit jen jeden vlastník. Volá se z vlákna mimo runtime
+    /// (receiver, test), ne z async kontextu.
+    #[allow(dead_code, reason = "volá ho Kotlin receiver přes JNI (D6); zatím jen test")]
+    pub fn sync_once(&self, config: &NetConfig, sink: Arc<dyn Sink>, limit: Duration) -> Result<usize, String> {
+        if self.link.lock().map_err(|_| lock_err())?.as_ref().is_some_and(|l| !l.finished()) {
+            return Err("Online klient běží, sync_once není potřeba".into());
+        }
+        let shared = self.shared.clone();
+        tauri::async_runtime::block_on(crate::net::sync_once(shared, config, sink, limit)).map_err(|e| e.to_string())
     }
 
     /// Spustí síťovou úlohu, je-li k tomu všechno (síť, odemčený trvalý profil) a ještě neběží.
