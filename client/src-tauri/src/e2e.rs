@@ -112,6 +112,76 @@ impl Drop for LocalNet {
     }
 }
 
+/// Odchozí spojení vlastního procesu (kritérium D5): vzorkuje `/proc/net/{tcp,tcp6,udp,udp6}` přes sokety z `/proc/self/fd`
+/// a sbírá vzdálené adresy. Krátké spojení mezi vzorky může uniknout; klient drží dlouhé WebSocket spojení a opakuje `/route`.
+struct Egress {
+    seen: Arc<Mutex<std::collections::BTreeSet<String>>>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Egress {
+    fn start() -> Self {
+        let seen = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (s, st) = (seen.clone(), stop.clone());
+        let thread = std::thread::spawn(move || {
+            while !st.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Ok(mut set) = s.lock() {
+                    set.extend(remotes());
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        Self { seen, stop, thread: Some(thread) }
+    }
+
+    fn finish(mut self) -> Vec<String> {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+        self.seen.lock().map(|s| s.iter().cloned().collect()).unwrap_or_default()
+    }
+}
+
+/// Vzdálené koncové body (`ip:port`, hex jako v /proc) všech navázaných soketů tohoto procesu.
+fn remotes() -> Vec<String> {
+    let mut inodes = std::collections::HashSet::new();
+    for fd in std::fs::read_dir("/proc/self/fd").into_iter().flatten().flatten() {
+        if let Ok(target) = std::fs::read_link(fd.path()) {
+            if let Some(i) = target.to_string_lossy().strip_prefix("socket:[").and_then(|t| t.strip_suffix(']')) {
+                inodes.insert(i.to_string());
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for table in ["tcp", "tcp6", "udp", "udp6"] {
+        let text = std::fs::read_to_string(format!("/proc/net/{table}")).unwrap_or_default();
+        for line in text.lines().skip(1) {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            // sl local rem st tx:rx tr:when retrnsmt uid timeout inode
+            if let (Some(rem), Some(inode)) = (cols.get(2), cols.get(9)) {
+                let unbound = rem.starts_with("00000000000000000000000000000000:0000") || *rem == "00000000:0000";
+                if inodes.contains(*inode) && !unbound {
+                    out.push(format!("{table} {rem}"));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `/proc/net/tcp` zapisuje adresu po bajtech v pořadí hostitele (little endian) a port hexadecimálně.
+fn is_loopback_port(entry: &str, ports: &[u16]) -> bool {
+    let Some((table, rem)) = entry.split_once(' ') else { return false };
+    let Some((ip, port)) = rem.split_once(':') else { return false };
+    let Ok(port) = u16::from_str_radix(port, 16) else { return false };
+    let v4_loopback = ip == "0100007F" || ip == "0000000000000000FFFF00000100007F";
+    let v6_loopback = ip == "00000000000000000000000001000000";
+    table.starts_with("tcp") && (v4_loopback || v6_loopback) && ports.contains(&port)
+}
+
 struct ChanSink(Mutex<Sender<UiEvent>>);
 
 impl Sink for ChanSink {
@@ -183,6 +253,7 @@ fn two_clients_chat_live_offline_and_without_duplicates() {
     }
     let net = LocalNet::start();
     let config = net.config();
+    let egress = Egress::start();
     let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
 
     // Bob je online; Alice zatím bez sítě, takže její první zpráva čeká ve frontě
@@ -236,4 +307,11 @@ fn two_clients_chat_live_offline_and_without_duplicates() {
     assert_eq!(texts(&alice, &to_bob.id).len(), 3);
     let list = bob.conversation_list().unwrap();
     assert_eq!((list.len(), list[0].last_text.as_str()), (1, "když jsi byl pryč"));
+
+    // D5: za celou dobu klienti mluvili jen s Workerem a s přesměrováním k nodům (`dev/local.sh`), nic jiného
+    let allowed = [net.worker.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()).unwrap(), net.forward];
+    let seen = egress.finish();
+    assert!(!seen.is_empty(), "sampler saw no connections");
+    let stray: Vec<&String> = seen.iter().filter(|e| !is_loopback_port(e, &allowed)).collect();
+    assert!(stray.is_empty(), "unexpected outbound connections: {stray:?}");
 }

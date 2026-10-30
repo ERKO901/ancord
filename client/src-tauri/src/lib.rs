@@ -9,7 +9,7 @@ mod store;
 
 use std::sync::Arc;
 
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 use crate::contract::{
     ConnectionState, Contact, ConversationPage, ConversationSummary, IdentityStatus, Message, Settings, UiEvent,
@@ -93,9 +93,17 @@ fn settings_get(core: State<Core>) -> Result<Settings, String> {
     core.settings_get()
 }
 
+/// Ochrana obsahu okna před snímáním obrazovky (§13.9). Na Linuxu ji platforma neumožňuje a volání nic nedělá.
+fn apply_protection(window: &WebviewWindow, on: bool) {
+    let _ = window.set_content_protected(on);
+}
+
 #[tauri::command]
-fn settings_set(core: State<Core>, settings: Settings) -> Result<(), String> {
-    core.settings_set(settings)
+fn settings_set(core: State<Core>, window: WebviewWindow, settings: Settings) -> Result<(), String> {
+    let on = settings.enhanced_protection;
+    core.settings_set(settings)?;
+    apply_protection(&window, on);
+    Ok(())
 }
 
 #[tauri::command]
@@ -104,8 +112,12 @@ fn lock(core: State<Core>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn unlock(core: State<Core>, passphrase: Option<String>) -> Result<(), String> {
-    core.unlock(passphrase)
+fn unlock(core: State<Core>, window: WebviewWindow, passphrase: Option<String>) -> Result<(), String> {
+    core.unlock(passphrase)?;
+    if let Ok(settings) = core.settings_get() {
+        apply_protection(&window, settings.enhanced_protection);
+    }
+    Ok(())
 }
 
 /// Události pro UI (`Events` v `types.ts`).
@@ -117,9 +129,29 @@ impl Sink for AppSink {
     }
 }
 
+/// Proces nesmí vyrobit core dump ani být čten přes ptrace/`/proc/<pid>/mem` od jiného procesu téhož uživatele (§9 bod 16).
+/// Na Linuxu `PR_SET_DUMPABLE=0`; Windows (WER) a macOS (crash reporter) řeší packaging, viz `client/README.md`.
+fn disable_core_dumps() {
+    #[cfg(target_os = "linux")]
+    if let Err(code) = prctl::set_dumpable(false) {
+        eprintln!("ancord: PR_SET_DUMPABLE selhal ({code})");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let result = tauri::Builder::default()
+    disable_core_dumps();
+    let builder = tauri::Builder::default();
+    // Druhé spuštění jen vynese okno prvního; dva procesy nad jedním profilem by si lámaly stav ratchetu (§13.9).
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }));
+    let result = builder
         .setup(|app| {
             // Profil v datové složce aplikace; chyba otevření (poškozený soubor) aplikaci nespustí, nic se nepřepíše.
             let dir = app.path().app_data_dir()?;
@@ -127,6 +159,11 @@ pub fn run() {
             // bez zapečené adresy a klíče Workeru (§13.3) zůstane klient offline
             if let Some(config) = NetConfig::from_build() {
                 core.go_online(config, Arc::new(AppSink(app.handle().clone())))?;
+            }
+            // profil zamčený heslem nemá nastavení k dispozici, proto výchozí je ochrana zapnutá; po odemčení se přepíše
+            let protect = core.settings_get().map(|s| s.enhanced_protection).unwrap_or(true);
+            if let Some(window) = app.get_webview_window("main") {
+                apply_protection(&window, protect);
             }
             app.manage(core);
             Ok(())
@@ -141,5 +178,34 @@ pub fn run() {
     if let Err(e) = result {
         eprintln!("ancord: aplikaci se nepodařilo spustit: {e}");
         std::process::exit(1);
+    }
+}
+
+/// Kontrola závislostí (§13.9, D5): žádná telemetrie, crash reporter, updater ani plugin s přístupem k síti/souborům z WebView.
+#[cfg(test)]
+mod deps_audit {
+    const FORBIDDEN: &[&str] = &[
+        "sentry", "sentry-core", "minidumper", "crash-handler", "breakpad", "firebase", "posthog-rs", "segment",
+        "tauri-plugin-updater", "tauri-plugin-http", "tauri-plugin-shell", "tauri-plugin-fs", "tauri-plugin-opener",
+        "tauri-plugin-global-shortcut", "tauri-plugin-log",
+    ];
+
+    #[test]
+    fn lockfile_has_no_telemetry_or_ambient_plugins() {
+        let lock = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.lock")).unwrap_or_default();
+        assert!(lock.contains("name = \"tauri\""), "Cargo.lock se nenačetl");
+        let found: Vec<&str> = lock
+            .lines()
+            .filter_map(|l| l.strip_prefix("name = \"").and_then(|l| l.strip_suffix('"')))
+            .filter(|n| FORBIDDEN.contains(n))
+            .collect();
+        assert!(found.is_empty(), "zakázané závislosti: {found:?}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn core_dumps_are_disabled() {
+        super::disable_core_dumps();
+        assert_eq!(prctl::get_dumpable(), Ok(false));
     }
 }

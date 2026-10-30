@@ -38,6 +38,12 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 [target.'cfg(not(target_os = "android"))'.dependencies]
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+prctl = "1"
+
 [lints.rust]
 # JNI most na Androidu bude v samostatném crate s lokální výjimkou (§13.4).
 unsafe_code = "deny"
