@@ -1,11 +1,14 @@
 {
   "2": "registration.ts",
   "16": "vectors.rs",
-  "19": "Sink",
+  "19": "CliError",
+  "20": "AutoDeviceKey",
   "22": "CliError",
   "23": "tests/e2e.rs",
   "26": ".initiate_with",
+  "36": "Bundle",
   "37": "ancord-core/src/net.rs",
+  "39": "UiEvent",
   "43": "b64u_decode_array",
   "44": "config.ts",
   "54": "NodeSocket",
@@ -16,6 +19,7 @@
   "100": "identity.rs",
   "113": "UserKeys",
   "114": "ancord-cli/src/main.rs",
+  "116": ".onCreate",
   "119": "ws.ts",
   "123": "snapshot.ts",
   "124": "super",
@@ -30,7 +34,5 @@
   "134": "scripts",
   "135": "NoDisk",
   "136": "MockCloudflareClient",
-  "137": "SeedRng",
-  "138": "ThemeChoice",
-  "139": ".drop"
+  "137": "SeedRng"
 }

@@ -6,16 +6,17 @@
 - Unclassified: 48 file(s) not represented in the graph (top: .toml 19, .xml 11, (none) 9)
 
 ## Summary
-- 2900 nodes · 7643 edges · 140 communities (112 shown, 28 thin omitted)
+- 2901 nodes · 7643 edges · 132 communities (105 shown, 27 thin omitted)
 - Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 415 edges (avg confidence: 0.86)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `ffac34cc`
+- Built from commit: `d675df3f`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
+- ScanActivity.kt
 - StoreError
 - registration.ts
 - push.test.ts
@@ -34,8 +35,8 @@
 - vectors.rs
 - path
 - App.svelte
-- Sink
-- DeviceKey
+- CliError
+- AutoDeviceKey
 - backend.ts
 - CliError
 - tests/e2e.rs
@@ -51,10 +52,9 @@
 - ancord-node/src/store.rs
 - b64u_encode
 - b64uEncode
-- UiEvent
 - ancord-core/src/net.rs
 - WorkerError
-- contract.rs
+- UiEvent
 - sign.rs
 - VirtualList.svelte
 - b64u_decode_array
@@ -83,7 +83,6 @@
 - tauri.conf.json
 - options
 - NODE_NAME
-- .lock
 - vectors.test.ts
 - node1
 - node2
@@ -118,17 +117,11 @@
 - Melo v2 – architektura
 - ancord-node/src/main.rs
 - MainActivity
-- ConnectionState
 - UserKeys
 - ancord-cli/src/main.rs
 - sha256
-- ScanActivity
-- LocalNet
-- Sink
 - ws.ts
 - ancord Worker
-- ConnectionIssue
-- Egress
 - snapshot.ts
 - super
 - Step
@@ -144,32 +137,30 @@
 - NoDisk
 - MockCloudflareClient
 - SeedRng
-- ThemeChoice
-- .drop
 
 ## God Nodes (most connected - your core abstractions)
 1. `NodeState` - 150 edges
 2. `CliError` - 80 edges
 3. `DataError` - 59 edges
 4. `Core` - 57 edges
-5. `Session` - 54 edges
-6. `b64uEncode()` - 54 edges
+5. `b64uEncode()` - 54 edges
+6. `Session` - 54 edges
 7. `unix_now()` - 53 edges
-8. `b64uDecodeLen()` - 45 edges
-9. `HttpError` - 45 edges
+8. `HttpError` - 45 edges
+9. `b64uDecodeLen()` - 45 edges
 10. `NodeSocket` - 44 edges
 
 ## Surprising Connections (you probably didn't know these)
+- `Nody` --references--> `node()`  [INFERRED]
+  ARCHITECTURE.md → worker/test/challenge.test.ts
 - `5.4 Push notifikace` --references--> `push_id()`  [INFERRED]
   ARCHITECTURE.md → spec/reference/pairwise.py
-- `E2E test (B1 až B4)` --references--> `push_id()`  [INFERRED]
-  node/README.md → spec/reference/pairwise.py
-- `Konfigurace nodu` --references--> `push_id()`  [INFERRED]
-  node/README.md → spec/reference/pairwise.py
 - `12.4 Pořadí prací a milníky` --references--> `CloudflareClient`  [INFERRED]
   ARCHITECTURE.md → worker/src/cloudflare.ts
 - `1.3 Podpisy a doménová separace` --references--> `Domain`  [INFERRED]
   spec/PROTOCOL.md → worker/src/crypto.ts
+- `Cloudflare (firemní zóna melonet.cz)` --references--> `node()`  [INFERRED]
+  CLAUDE.md → worker/test/challenge.test.ts
 
 ## Import Cycles
 - 1-file cycle: `node/crates/ancord-cli/src/main.rs -> node/crates/ancord-cli/src/main.rs`
@@ -181,19 +172,19 @@
 - 3-file cycle: `node/crates/ancord-node/src/data.rs -> node/crates/ancord-node/src/state.rs -> node/crates/ancord-node/src/peer.rs -> node/crates/ancord-node/src/data.rs`
 - 3-file cycle: `node/crates/ancord-node/src/data.rs -> node/crates/ancord-node/src/state.rs -> node/crates/ancord-node/src/presence.rs -> node/crates/ancord-node/src/data.rs`
 - 3-file cycle: `node/crates/ancord-node/src/peer.rs -> node/crates/ancord-node/src/presence.rs -> node/crates/ancord-node/src/state.rs -> node/crates/ancord-node/src/peer.rs`
-- 4-file cycle: `node/crates/ancord-node/src/data.rs -> node/crates/ancord-node/src/n2n.rs -> node/crates/ancord-node/src/peer.rs -> node/crates/ancord-node/src/presence.rs -> node/crates/ancord-node/src/data.rs`
 - 4-file cycle: `node/crates/ancord-node/src/data.rs -> node/crates/ancord-node/src/n2n.rs -> node/crates/ancord-node/src/state.rs -> node/crates/ancord-node/src/peer.rs -> node/crates/ancord-node/src/data.rs`
 - 4-file cycle: `node/crates/ancord-node/src/data.rs -> node/crates/ancord-node/src/n2n.rs -> node/crates/ancord-node/src/state.rs -> node/crates/ancord-node/src/presence.rs -> node/crates/ancord-node/src/data.rs`
+- 4-file cycle: `node/crates/ancord-node/src/data.rs -> node/crates/ancord-node/src/n2n.rs -> node/crates/ancord-node/src/peer.rs -> node/crates/ancord-node/src/presence.rs -> node/crates/ancord-node/src/data.rs`
 - 4-file cycle: `node/crates/ancord-node/src/data.rs -> node/crates/ancord-node/src/state.rs -> node/crates/ancord-node/src/peer.rs -> node/crates/ancord-node/src/presence.rs -> node/crates/ancord-node/src/data.rs`
 - 4-file cycle: `node/crates/ancord-node/src/data.rs -> node/crates/ancord-node/src/presence.rs -> node/crates/ancord-node/src/state.rs -> node/crates/ancord-node/src/peer.rs -> node/crates/ancord-node/src/data.rs`
-- 5-file cycle: `node/crates/ancord-node/src/data.rs -> node/crates/ancord-node/src/n2n.rs -> node/crates/ancord-node/src/peer.rs -> node/crates/ancord-node/src/state.rs -> node/crates/ancord-node/src/presence.rs -> node/crates/ancord-node/src/data.rs`
 - 5-file cycle: `node/crates/ancord-node/src/data.rs -> node/crates/ancord-node/src/n2n.rs -> node/crates/ancord-node/src/state.rs -> node/crates/ancord-node/src/peer.rs -> node/crates/ancord-node/src/presence.rs -> node/crates/ancord-node/src/data.rs`
+- 5-file cycle: `node/crates/ancord-node/src/data.rs -> node/crates/ancord-node/src/n2n.rs -> node/crates/ancord-node/src/peer.rs -> node/crates/ancord-node/src/state.rs -> node/crates/ancord-node/src/presence.rs -> node/crates/ancord-node/src/data.rs`
 
-## Communities (140 total, 28 thin omitted)
+## Communities (132 total, 27 thin omitted)
 
 ### Community 1 - "StoreError"
-Cohesion: 0.16
-Nodes (10): io(), KeychainDeviceKey, read_wrap(), StoreError, Corrupt, Io, Passphrase, Unlock (+2 more)
+Cohesion: 0.15
+Nodes (14): DeviceKey, Fake, io(), KeychainDeviceKey, read_wrap(), StoreError, Corrupt, Io (+6 more)
 
 ### Community 2 - "registration.ts"
 Cohesion: 0.16
@@ -216,8 +207,8 @@ Cohesion: 0.07
 Nodes (48): aad(), bootstrap_secret(), conversation_heals_after_a_state_leak(), dh(), Direction, InitiatorToResponder, ResponderToInitiator, ENC_HEADER_LEN (+40 more)
 
 ### Community 7 - "keepalive_if_due"
-Cohesion: 0.17
-Nodes (14): deliver(), keepalive_after_real_message_only_and_not_shown(), keepalive_if_due(), now_s(), pair(), Prepared, publish_guard(), Role (+6 more)
+Cohesion: 0.12
+Nodes (19): load_session(), deliver(), HistoryEntry, keepalive_after_real_message_only_and_not_shown(), keepalive_if_due(), now_s(), pair(), parse_address() (+11 more)
 
 ### Community 8 - "BuildTask.kt"
 Cohesion: 0.13
@@ -260,32 +251,28 @@ Cohesion: 0.27
 Nodes (3): LoadMeter, measure(), Measured
 
 ### Community 18 - "App.svelte"
-Cohesion: 0.11
-Nodes (20): hasMain, app, errText(), add(), address, busy, name, busy (+12 more)
+Cohesion: 0.10
+Nodes (19): hasMain, errText(), add(), address, busy, name, busy, go() (+11 more)
 
-### Community 19 - "Sink"
-Cohesion: 0.27
-Nodes (8): session_conv(), run(), set_state(), Sink, start(), sync_once(), Task, default_url()
-
-### Community 20 - "DeviceKey"
-Cohesion: 0.31
-Nodes (6): auto(), AutoDeviceKey, DeviceKey, Env, Fake, FileDeviceKey
+### Community 19 - "CliError"
+Cohesion: 0.19
+Nodes (10): save_contact_rec(), session_conv(), StorePersist, update_message(), Task, CliError, Admission, Node (+2 more)
 
 ### Community 21 - "backend.ts"
-Cohesion: 0.12
-Nodes (19): Args, installDevBackend(), Result, b64u(), createMockBackend(), digits(), fakeQr(), MockOptions (+11 more)
+Cohesion: 0.11
+Nodes (20): Args, installDevBackend(), Result, b64u(), createMockBackend(), digits(), fakeQr(), MockOptions (+12 more)
 
 ### Community 22 - "CliError"
-Cohesion: 0.18
-Nodes (15): CliError, Admission, Node, PowRequired, Route, Session, publish_profile(), MAX_SUBSCRIPTIONS (+7 more)
+Cohesion: 0.24
+Nodes (8): b64u_encode(), Online, OnlineEvent, Contact, Message, Postponed, Typing, Persist
 
 ### Community 23 - "tests/e2e.rs"
-Cohesion: 0.07
-Nodes (10): ADMIN, admin_nodes(), eventually(), forward(), free_port(), NodeProc, Proc, spawn_node() (+2 more)
+Cohesion: 0.06
+Nodes (11): ADMIN, admin_nodes(), eventually(), forward(), free_port(), NodeProc, Proc, spawn_node() (+3 more)
 
 ### Community 24 - "core.rs"
-Cohesion: 0.11
-Nodes (10): ContactRec, IDENTITY_KEY, MAX_TEXT, msg_key(), Network, now_ms(), OutItem, put_message() (+2 more)
+Cohesion: 0.06
+Nodes (20): ContactRec, FAST, identity_is_created_once_and_address_has_the_scheme(), IDENTITY_KEY, MAX_TEXT, msg_key(), Network, now() (+12 more)
 
 ### Community 25 - "push/store.ts"
 Cohesion: 0.08
@@ -316,8 +303,8 @@ Cohesion: 0.10
 Nodes (20): Cmd, Connect, History, Inbox, Init, Keygen, Lookup, Publish (+12 more)
 
 ### Community 32 - "Table"
-Cohesion: 0.21
-Nodes (9): prefix_end(), Record, Store, Table, Contacts, Conversations, Identity, Messages (+1 more)
+Cohesion: 0.22
+Nodes (8): Record, Store, Table, Contacts, Conversations, Identity, Messages, Settings
 
 ### Community 33 - "ancord-node/src/store.rs"
 Cohesion: 0.07
@@ -331,21 +318,17 @@ Nodes (8): heartbeat(), KEEPALIVE, on_directory(), Outcome, Banned, Reconnect, R
 Cohesion: 0.13
 Nodes (17): canonicalBytes(), b64uDecodeLen(), b64uEncode(), randomBytes(), requiredBits(), activate(), decodePubkey(), registerBegin() (+9 more)
 
-### Community 36 - "UiEvent"
-Cohesion: 0.17
-Nodes (8): UiEvent, ConnectionIssue, ConnectionState, ContactRequest, DeliveryState, MessageReceived, Typing, ChanSink
-
 ### Community 37 - "ancord-core/src/net.rs"
-Cohesion: 0.12
-Nodes (20): Accepted, admission(), admit(), admit_unchecked(), AllFailed, connect_any(), HistoryEntry, INBOX_POW_BITS (+12 more)
+Cohesion: 0.13
+Nodes (20): sync_once(), Accepted, admission(), admit(), admit_unchecked(), AllFailed, connect_any(), default_url() (+12 more)
 
 ### Community 38 - "WorkerError"
 Cohesion: 0.12
 Nodes (9): WorkerError, Api, Protocol, Transport, BeginResponse, ConfirmResponse, nonce_b64(), signed_header() (+1 more)
 
-### Community 39 - "contract.rs"
-Cohesion: 0.15
-Nodes (14): Contact, ConversationPage, ConversationSummary, DeliveryState, Delivered, Pending, Queued, Unknown (+6 more)
+### Community 39 - "UiEvent"
+Cohesion: 0.06
+Nodes (37): ConnectionIssue, NodeRejected, NodeUnreachable, ProtocolMismatch, RouteUntrusted, WorkerError, WorkerUnreachable, ConnectionState (+29 more)
 
 ### Community 40 - "sign.rs"
 Cohesion: 0.12
@@ -409,15 +392,15 @@ Nodes (3): Java_cz_melonet_ancord_SyncReceiver_nativeSync(), LogSink, run()
 
 ### Community 54 - "NodeSocket"
 Cohesion: 0.18
-Nodes (20): b64u_encode(), ack_inbox(), Connection, Event, Message, Typing, lookup_profile(), message_status() (+12 more)
+Nodes (17): Connection, PowRequired, Event, Message, Typing, message_status(), next_event(), next_pushed() (+9 more)
 
 ### Community 56 - "13. Klient (Android a desktop)"
 Cohesion: 0.11
 Nodes (20): 13.10 Platformní specifika, 13.11 Rozpočet výkonu (cíle, měří se), 13.12 Struktura `client/`, 13.13 Testování, 13.15 Mimo rozsah v1 klienta, 13.1 Cíle a pořadí priorit, 13.2 Volba technologie, 13.3 Vrstvy a hranice důvěry (+12 more)
 
 ### Community 57 - "src/e2e.rs"
-Cohesion: 0.24
-Nodes (11): client(), free_port(), is_loopback_port(), NODES, online(), received(), repo(), state_of() (+3 more)
+Cohesion: 0.12
+Nodes (15): ChanSink, client(), Egress, free_port(), is_loopback_port(), LocalNet, NODES, online() (+7 more)
 
 ### Community 58 - "ProofError"
 Cohesion: 0.12
@@ -428,8 +411,8 @@ Cohesion: 0.20
 Nodes (9): dev, Failover, Kontrola, Lokální běh bez Dockeru a Cloudflare, Nový node, výměna klíče, Postup, Požadavky na server, Úklid (+1 more)
 
 ### Community 61 - ".with"
-Cohesion: 0.14
-Nodes (13): contacts_reject_garbage_self_and_duplicates(), identity_contacts_and_settings_survive_a_restart(), identity_is_created_once_and_address_has_the_scheme(), Inner, memory_core_cannot_send(), now(), offline_messages_are_queued_paged_and_survive_a_restart(), qr_is_an_svg() (+5 more)
+Cohesion: 0.10
+Nodes (15): contacts_reject_garbage_self_and_duplicates(), conv_id(), identity_contacts_and_settings_survive_a_restart(), Inner, locked_core_exposes_nothing(), memory_core_cannot_send(), offline_messages_are_queued_paged_and_survive_a_restart(), passphrase_profile_stays_locked_until_the_right_passphrase() (+7 more)
 
 ### Community 62 - "server.rs"
 Cohesion: 0.13
@@ -441,7 +424,7 @@ Nodes (13): name, services, volumes, node1-data, node2-data, node3-data, node4-d
 
 ### Community 65 - "Chat.svelte"
 Cohesion: 0.12
-Nodes (19): contactName(), connLabel, connText(), initials(), issueLabel, shortAddress(), stateLabel, timeFull() (+11 more)
+Nodes (20): app, contactName(), connLabel, connText(), initials(), issueLabel, shortAddress(), stateLabel (+12 more)
 
 ### Community 66 - "tauri.conf.json"
 Cohesion: 0.10
@@ -454,10 +437,6 @@ Nodes (11): driver, options, logging, logging, logging, logging, logging, loggin
 ### Community 68 - "NODE_NAME"
 Cohesion: 0.53
 Nodes (10): NODE_NAME, RUST_LOG, WORKER_PUBKEY, WORKER_URL, environment, environment, environment, environment (+2 more)
-
-### Community 69 - ".lock"
-Cohesion: 0.18
-Nodes (6): conv_id(), lock_err(), locked_core_exposes_nothing(), passphrase_profile_stays_locked_until_the_right_passphrase(), NetConfig, hex_encode()
 
 ### Community 70 - "vectors.test.ts"
 Cohesion: 0.06
@@ -484,8 +463,8 @@ Cohesion: 0.17
 Nodes (5): MAX_REPORTED, PeerHealth, pull_directory(), PULL_MIN_INTERVAL_S, Reach
 
 ### Community 76 - "src-tauri/src/store.rs"
-Cohesion: 0.10
-Nodes (15): FAST, FAST, CONTEXT, FAST, KdfParams, META, MODE_DEVICE, MODE_PASSPHRASE (+7 more)
+Cohesion: 0.12
+Nodes (10): CONTEXT, META, MODE_DEVICE, MODE_PASSPHRASE, NONCE_LEN, prefix_end(), SALT_LEN, WRAP_HEADER (+2 more)
 
 ### Community 77 - "node4"
 Cohesion: 0.20
@@ -520,12 +499,12 @@ Cohesion: 0.12
 Nodes (25): Core, address_get(), address_qr(), apply_protection(), AppSink, connection_state(), contact_add(), contact_list() (+17 more)
 
 ### Community 88 - "Shared"
-Cohesion: 0.15
-Nodes (5): Awaiting, save_contact_rec(), Shared, StorePersist, update_message()
+Cohesion: 0.13
+Nodes (8): Awaiting, lock_err(), Shared, NetConfig, run(), set_state(), Sink, start()
 
 ### Community 89 - ".create"
-Cohesion: 0.35
-Nodes (10): device_mode_reports_no_passphrase(), env(), foreign_device_key_does_not_open(), keychain_is_preferred_and_file_is_not_created(), passphrase_is_required_and_checked(), plaintext_is_not_in_the_file(), records_survive_a_restart(), scan_and_delete_prefix_are_scoped() (+2 more)
+Cohesion: 0.27
+Nodes (13): auto(), device_mode_reports_no_passphrase(), Env, env(), FileDeviceKey, foreign_device_key_does_not_open(), keychain_is_preferred_and_file_is_not_created(), passphrase_is_required_and_checked() (+5 more)
 
 ### Community 91 - "ancord"
 Cohesion: 0.25
@@ -560,16 +539,12 @@ Cohesion: 0.20
 Nodes (5): NodeError, main(), resolve_worker_key(), run(), shutdown_signal()
 
 ### Community 110 - "MainActivity"
-Cohesion: 0.24
-Nodes (4): 13.14 Milníky fáze D, ConnectionIssue, MainActivity, ScanBridge
-
-### Community 112 - "ConnectionState"
-Cohesion: 0.50
-Nodes (4): ConnectionState, Connecting, Offline, Online
+Cohesion: 0.27
+Nodes (3): 13.14 Milníky fáze D, MainActivity, ScanBridge
 
 ### Community 113 - "UserKeys"
-Cohesion: 0.13
-Nodes (18): create_user(), load_session(), load_user(), lock_file(), save_session(), save_user(), write_private(), Cli (+10 more)
+Cohesion: 0.14
+Nodes (20): create_user(), load_user(), lock_file(), save_session(), save_user(), write_private(), Cli, conversation_files() (+12 more)
 
 ### Community 114 - "ancord-cli/src/main.rs"
 Cohesion: 0.09
@@ -579,10 +554,6 @@ Nodes (4): Route, main(), open(), PUSH_FILE
 Cohesion: 0.23
 Nodes (8): leading_zero_bits(), solve(), valid(), compute_checkpoints(), CpuError, BadParams, lane_checkpoints(), lane_start()
 
-### Community 118 - "Sink"
-Cohesion: 0.20
-Nodes (4): Cmd, Flush, Typing, Link
-
 ### Community 119 - "ws.ts"
 Cohesion: 0.16
 Nodes (21): Json, ensureSchedule(), onPong(), slotsOf(), broadcastDirectory(), DirectoryBody, DirectoryNode, eligibleForDirectory() (+13 more)
@@ -590,10 +561,6 @@ Nodes (21): Json, ensureSchedule(), onPong(), slotsOf(), broadcastDirectory(), D
 ### Community 120 - "ancord Worker"
 Cohesion: 0.25
 Nodes (7): ancord Worker, Konfigurace, Nasazení (fáze C1 a C2), Příkazy, Správa (`Authorization: Bearer $ADMIN_TOKEN`), Struktura, Tajemství (`wrangler secret put`, nikdy do gitu)
-
-### Community 121 - "ConnectionIssue"
-Cohesion: 0.29
-Nodes (7): ConnectionIssue, NodeRejected, NodeUnreachable, ProtocolMismatch, RouteUntrusted, WorkerError, WorkerUnreachable
 
 ### Community 123 - "snapshot.ts"
 Cohesion: 0.17
@@ -643,29 +610,25 @@ Nodes (10): ancord node, Bezpečnostní poznámky, CLI klient: běžné použit�
 Cohesion: 0.22
 Nodes (9): scripts, budget, build, check, dev, preview, tauri, test (+1 more)
 
-### Community 138 - "ThemeChoice"
-Cohesion: 0.33
-Nodes (5): Settings, ThemeChoice, Dark, Light, System
-
 ## Knowledge Gaps
-- **125 isolated node(s):** `ancord-client`, `None`, `Locked`, `Ready`, `Queued` (+120 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 879 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **28 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **125 isolated node(s):** `Corrupt`, `Passphrase`, `Unlock`, `ancord-client`, `BadPublicKey` (+120 more)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 880 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **27 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `wake()` connect `push_id` to `13. Klient (Android a desktop)`, `b64uEncode`, `push.test.ts`?**
-  _High betweenness centrality (0.238) - this node is a cross-community bridge._
+  _High betweenness centrality (0.254) - this node is a cross-community bridge._
 - **Are the 2 inferred relationships involving `NodeState` (e.g. with `OutSessions` and `Reach`) actually correct?**
   _`NodeState` has 2 INFERRED edges - model-reasoned connections that need verification._
-- **What connects `ancord-client`, `None`, `Locked` to the rest of the system?**
+- **What connects `Corrupt`, `Passphrase`, `Unlock` to the rest of the system?**
   _125 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `ScanActivity.kt` be split into smaller, more focused modules?**
-  _Cohesion score 0.13333333333333333 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.11052631578947368 - nodes in this community are weakly interconnected._
 - **Why does `push_id()` connect `push_id` to `ancord node`, `Melo v2 – architektura`, `ratchet.py`, `channel.py`, `13. Klient (Android a desktop)`?**
-  _High betweenness centrality (0.190) - this node is a cross-community bridge._
-- **Should `push.test.ts` be split into smaller, more focused modules?**
-  _Cohesion score 0.09623015873015874 - nodes in this community are weakly interconnected._
+  _High betweenness centrality (0.196) - this node is a cross-community bridge._
+- **Should `StoreError` be split into smaller, more focused modules?**
+  _Cohesion score 0.1476923076923077 - nodes in this community are weakly interconnected._
 - **Why does `b64uEncode()` connect `b64uEncode` to `registration.ts`, `push.test.ts`, `index.ts`, `vectors.test.ts`, `scheduler.ts`, `push_id`, `ws.ts`, `push/store.ts`, `snapshot.ts`, `ticket.ts`?**
-  _High betweenness centrality (0.148) - this node is a cross-community bridge._
+  _High betweenness centrality (0.171) - this node is a cross-community bridge._
