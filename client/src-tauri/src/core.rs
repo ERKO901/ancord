@@ -86,6 +86,7 @@ pub struct Core {
     dir: Option<PathBuf>,
     kdf: KdfParams,
     /// Použít platformní úložiště klíčů (v testech vypnuto).
+    #[cfg_attr(target_os = "android", allow(dead_code, reason = "Android má Keystore přes Kotlin plugin (D6)"))]
     keychain: bool,
     /// Kam se připojit a komu hlásit události; `None` = offline (bez konfigurace sítě nebo v testech).
     network: Mutex<Option<Network>>,

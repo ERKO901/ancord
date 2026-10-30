@@ -11,7 +11,7 @@ rm -rf "$RUN"; mkdir -p "$RUN/logs"
 trap 'kill 0' EXIT
 
 cargo build -q --manifest-path "$ROOT/node/Cargo.toml" -p ancord-node -p ancord-cli
-NODE=$ROOT/node/target/debug/ancord-node
+NODE=${CARGO_TARGET_DIR:-$ROOT/node/target}/debug/ancord-node
 
 ids=(); hosts=(); map=()
 for i in $(seq 1 "$N"); do

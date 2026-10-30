@@ -1,5 +1,7 @@
 //! Rust shell klienta (§13.3). WebView je nedůvěryhodný: smí volat jen příkazy z kontraktu.
 
+#[cfg(target_os = "android")]
+mod android_sync;
 mod contract;
 mod core;
 #[cfg(test)]
