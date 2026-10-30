@@ -24,7 +24,7 @@ impl Sink for LogSink {
 
 fn run(dir: String) -> Result<usize, String> {
     let config = NetConfig::from_build().ok_or("chybí konfigurace Workeru")?;
-    // Android nemá Keychain, profil s heslem zůstane zamčený a `sync_once` ho neotevře (zprávy se vyzvednou po odemknutí).
+    // Klíč zařízení je v Android Keystore (`android_keystore.rs`); profil s heslem zůstane zamčený a `sync_once` ho neotevře (zprávy se vyzvednou po odemknutí).
     let core = Core::persistent(dir.into(), KdfParams::default(), false)?;
     core.sync_once(&config, Arc::new(LogSink), Duration::from_secs(20))
 }

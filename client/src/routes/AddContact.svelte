@@ -6,6 +6,15 @@
   let name = $state("");
   let busy = $state(false);
 
+  // Android: nativní skener QR (`MainActivity.ScanBridge`); jinde tlačítko není. Výsledek jen vyplní pole, přidání potvrdí uživatel.
+  const scanner = (window as unknown as { AncordScan?: { scan(): void } }).AncordScan;
+  function scan() {
+    (window as unknown as { __ancordScan?: (t: string | null) => void }).__ancordScan = (t) => {
+      if (t) address = t.trim();
+    };
+    scanner?.scan();
+  }
+
   async function add() {
     busy = true;
     app.error = null;
@@ -27,6 +36,9 @@
       <span class="muted">Adresa</span>
       <input class="field mono" placeholder="ancord:…" bind:value={address} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
     </label>
+    {#if scanner}
+      <button type="button" class="btn" onclick={scan}>Skenovat QR kód</button>
+    {/if}
     <label>
       <span class="muted">Jméno (jen u vás)</span>
       <input class="field" placeholder="Například Alice" bind:value={name} autocomplete="off" autocorrect="off" />

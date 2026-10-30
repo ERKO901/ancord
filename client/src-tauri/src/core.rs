@@ -391,7 +391,7 @@ impl Core {
             Box::new(crate::store::KeychainDeviceKey { service: "cz.melonet.ancord".into(), user: format!("device-key:{}", dir.display()) }) as _
         });
         #[cfg(target_os = "android")]
-        let keychain: Option<Box<dyn DeviceKey + Send + Sync>> = None;
+        let keychain: Option<Box<dyn DeviceKey + Send + Sync>> = Some(Box::new(crate::android_keystore::AndroidKeystoreDeviceKey(dir.join("device.key.ks"))));
         Ok(AutoDeviceKey { file: FileDeviceKey(dir.join("device.key")), keychain })
     }
 

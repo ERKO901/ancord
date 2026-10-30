@@ -59,7 +59,7 @@
     rows="1"
     placeholder="Napsat zprávu"
     aria-label="Zpráva"
-    autocomplete="off" autocorrect="off"
+    autocomplete="off"
     autocapitalize="sentences"
     spellcheck="false"
     enterkeyhint="send"

@@ -1,6 +1,12 @@
 package cz.melonet.ancord
 
+import android.Manifest
 import android.app.AlertDialog
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.webkit.JavascriptInterface
+import androidx.activity.result.contract.ActivityResultContracts
+import org.json.JSONObject
 import android.os.Build
 import android.os.Bundle
 import android.view.View
@@ -9,6 +15,34 @@ import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
+  private var webView: WebView? = null
+
+  private val scanResult = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+    deliverScan(r.data?.getStringExtra(ScanActivity.EXTRA_TEXT))
+  }
+  private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+    if (granted) scanResult.launch(Intent(this, ScanActivity::class.java)) else deliverScan(null)
+  }
+
+  /** Most pro UI: `window.AncordScan.scan()`, výsledek (text nebo null) přijde do `window.__ancordScan`. Vrací jen text QR. */
+  private inner class ScanBridge {
+    @JavascriptInterface
+    fun scan() {
+      runOnUiThread {
+        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+          scanResult.launch(Intent(this@MainActivity, ScanActivity::class.java))
+        } else {
+          cameraPermission.launch(Manifest.permission.CAMERA)
+        }
+      }
+    }
+  }
+
+  private fun deliverScan(text: String?) {
+    val arg = if (text == null) "null" else JSONObject.quote(text)
+    webView?.evaluateJavascript("window.__ancordScan && window.__ancordScan($arg)", null)
+  }
+
   companion object {
     // Nejnižší hlavní verze Android System WebView (Chromium); UI se překládá na ES2022 (Chrome 94+), rezerva na CSS a výkon.
     const val MIN_WEBVIEW_MAJOR = 110
@@ -25,6 +59,8 @@ class MainActivity : TauriActivity() {
   // Autofill a ukládání formulářů se u WebView vypíná celé: hesla ani text zpráv nemají skončit u cizí služby.
   // Klávesnici „bez učení“ (IME_FLAG_NO_PERSONALIZED_LEARNING) tu nenastavíme, WebView vytváří wry; viz ARCHITECTURE.md §13.14.
   override fun onWebViewCreate(webView: WebView) {
+    this.webView = webView
+    webView.addJavascriptInterface(ScanBridge(), "AncordScan")
     checkWebViewVersion()
     webView.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
     @Suppress("DEPRECATION")

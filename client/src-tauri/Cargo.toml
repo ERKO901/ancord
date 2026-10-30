@@ -34,7 +34,7 @@ tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 
-# Android má vlastní Keystore přes Kotlin plugin (D6), `keyring` tam backend nemá.
+# Android má vlastní Keystore přes JNI a Kotlin `KeystoreKey` (D6), `keyring` tam backend nemá.
 [target.'cfg(not(target_os = "android"))'.dependencies]
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 
