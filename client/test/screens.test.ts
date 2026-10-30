@@ -43,9 +43,13 @@ afterEach(() => {
 describe("obrazovky (D4: každá se vykreslí a reaguje)", () => {
   it("onboarding → vytvoření identity → seznam", async () => {
     await start({ seed: false });
+    expect(text()).toContain("Začít");
+    await click("Začít");
+    await click("Další");
+    await click("Přeskočit");
     expect(text()).toContain("Vytvořit identitu");
     await click("Vytvořit identitu");
-    expect(text()).toContain("Zatím žádné konverzace");
+    expect(text()).toContain("Vítejte v ancordu");
   });
 
   it("seznam konverzací ukáže stav spojení, nepřečtené a poslední zprávu", async () => {
@@ -117,7 +121,7 @@ describe("obrazovky (D4: každá se vykreslí a reaguje)", () => {
     const num = document.querySelector(".num")?.textContent ?? "";
     expect(num.replaceAll(" ", "")).toMatch(/^\d{60}$/);
     await click("Čísla souhlasí");
-    expect(text()).toContain("Ověřeno");
+    expect(text()).toContain("Ověřený kontakt");
   });
 
   it("nový kontakt: neplatná adresa ukáže chybu, platná otevře detail", async () => {
@@ -140,7 +144,7 @@ describe("obrazovky (D4: každá se vykreslí a reaguje)", () => {
 
   it("moje adresa: QR jako obrázek (data:), ne vložené HTML", async () => {
     await start();
-    await click("Moje adresa");
+    await click("Profil");
     const img = document.querySelector<HTMLImageElement>("img.qr");
     expect(img?.src.startsWith("data:image/svg+xml")).toBe(true);
     expect(text()).toContain("ancord:");

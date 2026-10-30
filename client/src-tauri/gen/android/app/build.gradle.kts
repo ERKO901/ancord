@@ -14,6 +14,14 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Podpis release APK: `keystore.properties` (v .gitignore) nebo proměnné prostředí ANCORD_KEYSTORE, ANCORD_KEYSTORE_PASSWORD,
+// ANCORD_KEY_ALIAS. Bez nich se release APK nepodepíše (zůstane unsigned).
+val signingProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun signing(key: String, env: String): String? = signingProps.getProperty(key) ?: System.getenv(env)
+
 android {
     compileSdk = 37
     namespace = "cz.melonet.ancord"
@@ -24,6 +32,17 @@ android {
         targetSdk = 37
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        val store = signing("storeFile", "ANCORD_KEYSTORE")
+        if (store != null) {
+            create("release") {
+                storeFile = file(store)
+                storePassword = signing("storePassword", "ANCORD_KEYSTORE_PASSWORD")
+                keyAlias = signing("keyAlias", "ANCORD_KEY_ALIAS") ?: "ancord"
+                keyPassword = signing("keyPassword", "ANCORD_KEYSTORE_PASSWORD")
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -39,6 +58,7 @@ android {
             }
         }
         getByName("release") {
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             optimization {
                enable = true
             }

@@ -26,6 +26,23 @@ npm run tauri dev  # okno aplikace (vyžaduje WebKitGTK 4.1 na Linuxu)
 
 Rust shell (`cd src-tauri`): `cargo clippy --all-targets -- -D warnings`, `cargo test`. Má vlastní workspace, `node/` se tím nemění. `cargo test` zahrnuje E2E test D3: spustí `dev/local.sh 3` na volných portech (potřebuje `npm install` ve `worker/`, jinak se přeskočí; `ANCORD_SKIP_E2E=1` ho vypne), trvá kolem minuty.
 
+## Android release APK
+
+Podepsaný release (`arm64-v8a`, minSdk 26) s vypálenou adresou a klíčem produkčního Workeru:
+
+```
+export JAVA_HOME=… ANDROID_HOME=… NDK_HOME=…/ndk/26.3.11579264
+export PATH=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH CC_aarch64_linux_android=aarch64-linux-android26-clang
+ANCORD_WORKER_URL=https://ancord.melonet.cz ANCORD_WORKER_PUBKEY=<b64u z ARCHITECTURE.md> \
+  npx tauri android build --apk --target aarch64
+```
+
+Výstup: `src-tauri/gen/android/app/build/outputs/apk/universal/release/`. Podpis čte `gen/android/keystore.properties` (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`; soubor je v `.gitignore`) nebo proměnné `ANCORD_KEYSTORE`, `ANCORD_KEYSTORE_PASSWORD`, `ANCORD_KEY_ALIAS`. **Keystore do gitu nepatří a nejde obnovit**: s jiným klíčem se aplikace nedá aktualizovat přes existující instalaci, jen přeinstalovat. Verze je v `package.json`, `tauri.conf.json` a `src-tauri/Cargo.toml` (musí se shodovat).
+
+## Vzhled (0.2.0)
+
+Spodní navigace (Chaty, Kontakty, Profil, Nastavení; na širokém okně pod seznamem), úvod o čtyřech krocích, barevné avatary, hledání a filtr nepřečtených, oddělovače dnů a seskupené bubliny v konverzaci, profil s QR a sdílením, stránka O ancordu, přepínače v nastavení. Jen UI: IPC kontrakt se nezměnil. Ikona a značka: `client/src/lib/ui/Logo.svelte`, zdroj ikony se generuje `npx tauri icon` ze SVG.
+
 ## Síť
 
 Adresa a veřejný klíč Workeru jsou kořeny důvěry (§13.3) a zapékají se při buildu: `ANCORD_WORKER_URL`, `ANCORD_WORKER_PUBKEY` (b64u, z `/.well-known/ancord-key` při nasazení), volitelně `ANCORD_NODE_URL` (šablona adresy nodu, výchozí `wss://{hostname}/client`) a `ANCORD_POW_BITS` (obtížnost profilu, výchozí 10). Debug build je čte i za běhu z prostředí, release ne. Bez URL a klíče zůstane klient offline a zprávy čekají ve frontě.

@@ -3,7 +3,7 @@ import type {
   ConnectionIssue, ConnectionState, Contact, ConversationSummary, IdentityStatus, Message, Settings,
 } from "./types";
 
-export type View = "list" | "chat" | "contacts" | "contact" | "add" | "settings" | "me";
+export type View = "list" | "chat" | "contacts" | "contact" | "add" | "settings" | "me" | "about";
 
 const PAGE = 100;
 
@@ -163,6 +163,23 @@ export async function saveSettings(patch: Partial<Settings>): Promise<void> {
   const next = { ...app.settings, ...patch };
   app.settings = next;
   await call("settings_set", { settings: next });
+}
+
+/** Záložka hlavní navigace, pod kterou patří obrazovka. */
+export function tabOf(view: View): "list" | "contacts" | "me" | "settings" {
+  if (view === "chat" || view === "list") return "list";
+  if (view === "contact" || view === "add" || view === "contacts") return "contacts";
+  if (view === "about" || view === "settings") return "settings";
+  return "me";
+}
+
+/** Hlavní navigace se ukazuje jen na obrazovkách nejvyšší úrovně. */
+export function isTopLevel(view: View): boolean {
+  return view === "list" || view === "contacts" || view === "me" || view === "settings";
+}
+
+export function totalUnread(): number {
+  return app.conversations.reduce((n, c) => n + c.unread, 0);
 }
 
 export function contactName(id: string | null): string {

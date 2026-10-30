@@ -40,3 +40,32 @@ export function connText(conn: keyof typeof connLabel, issue: keyof typeof issue
 export const stateLabel = {
   queued: "Čeká na odeslání", pending: "Odesílá se", delivered: "Doručeno", unknown: "Stav neznámý",
 } as const;
+
+/** Odstín avataru ze jména: stejné jméno má vždy stejnou barvu. */
+export function hue(name: string): number {
+  let h = 2166136261;
+  for (const c of name.trim().toLowerCase()) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0;
+  return h % 360;
+}
+
+/** Nadpis dne pro oddělovač v konverzaci. */
+export function dayLabel(ts: number, now = Date.now()): string {
+  const d = new Date(ts);
+  const n = new Date(now);
+  if (d.toDateString() === n.toDateString()) return "Dnes";
+  const y = new Date(now - 86_400_000);
+  if (d.toDateString() === y.toDateString()) return "Včera";
+  return d.toLocaleDateString(cs, { weekday: "long", day: "numeric", month: "long", ...(d.getFullYear() !== n.getFullYear() ? { year: "numeric" } : {}) });
+}
+
+export function sameDay(a: number, b: number): boolean {
+  return new Date(a).toDateString() === new Date(b).toDateString();
+}
+
+const collator = new Intl.Collator(cs);
+export const byName = (a: { name: string }, b: { name: string }) => collator.compare(a.name, b.name);
+
+/** Hledání bez ohledu na velikost písmen a diakritiku. */
+export function fold(s: string): string {
+  return s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}

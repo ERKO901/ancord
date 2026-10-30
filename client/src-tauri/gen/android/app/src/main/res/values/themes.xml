@@ -1,6 +1,6 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
+    <!-- Barvy okna odpovídají tokenům UI (client/src/styles/tokens.css), aby při startu neblikla bílá. -->
     <style name="Theme.ancord_client" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your theme here. -->
+        <item name="android:windowBackground">#FFFAF9F5</item>
     </style>
 </resources>
