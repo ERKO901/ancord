@@ -309,6 +309,7 @@ impl Store {
         self.open_record(table, key, v.value()).map(Some)
     }
 
+    #[cfg(test)]
     pub fn delete(&self, table: Table, key: &[u8]) -> Result<bool, StoreError> {
         let tx = self.db.begin_write().map_err(io)?;
         let removed = {
@@ -333,6 +334,26 @@ impl Store {
             out.push((k.value().to_vec(), self.open_record(table, k.value(), v.value())?));
         }
         Ok(out)
+    }
+
+    /// Nejvýše `limit` záznamů s prefixem `prefix`, jejichž klíč je menší než `prefix ‖ before` (bez `before`
+    /// všechny), od nejnovějšího (sestupně). Druhá hodnota říká, zda zbývají další starší.
+    pub fn scan_rev(&self, table: Table, prefix: &[u8], before: Option<&[u8]>, limit: usize) -> Result<(Vec<Record>, bool), StoreError> {
+        let end = match before {
+            Some(b) => [prefix, b].concat(),
+            None => prefix_end(prefix),
+        };
+        let tx = self.db.begin_read().map_err(io)?;
+        let t = tx.open_table(table.def()).map_err(io)?;
+        let mut out = Vec::new();
+        for row in t.range(prefix..end.as_slice()).map_err(io)?.rev() {
+            let (k, v) = row.map_err(io)?;
+            if out.len() == limit {
+                return Ok((out, true));
+            }
+            out.push((k.value().to_vec(), self.open_record(table, k.value(), v.value())?));
+        }
+        Ok((out, false))
     }
 
     /// Smaže všechny záznamy s daným prefixem (`conversation_delete`).
@@ -360,6 +381,18 @@ impl Store {
         tx.commit().map_err(io)?;
         Ok(keys.len())
     }
+}
+
+/// Nejmenší klíč větší než všechny klíče s prefixem `prefix` (prefix nesmí být prázdný ani samé `0xff`).
+fn prefix_end(prefix: &[u8]) -> Vec<u8> {
+    let mut end = prefix.to_vec();
+    while let Some(last) = end.pop() {
+        if last < u8::MAX {
+            end.push(last + 1);
+            return end;
+        }
+    }
+    vec![u8::MAX; prefix.len() + 1]
 }
 
 fn read_wrap(db: &Database) -> Result<Vec<u8>, StoreError> {

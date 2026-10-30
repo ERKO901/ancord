@@ -2,14 +2,20 @@
 
 mod contract;
 mod core;
+#[cfg(test)]
+mod e2e;
+mod net;
 mod store;
 
-use tauri::{Manager, State};
+use std::sync::Arc;
+
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::contract::{
-    ConnectionState, Contact, ConversationPage, ConversationSummary, IdentityStatus, Message, Settings,
+    ConnectionState, Contact, ConversationPage, ConversationSummary, IdentityStatus, Message, Settings, UiEvent,
 };
 use crate::core::Core;
+use crate::net::{NetConfig, Sink};
 use crate::store::KdfParams;
 
 #[tauri::command]
@@ -59,19 +65,17 @@ fn conversation_list(core: State<Core>) -> Result<Vec<ConversationSummary>, Stri
 
 #[tauri::command]
 fn conversation_open(core: State<Core>, id: String, before: Option<u64>, limit: u32) -> Result<ConversationPage, String> {
-    let _ = (id, before, limit);
-    core.conversation_open()
+    core.conversation_open(&id, before, limit)
 }
 
 #[tauri::command]
 fn message_send(core: State<Core>, id: String, text: String) -> Result<Message, String> {
-    let _ = (id, text);
-    core.message_send()
+    core.message_send(&id, &text)
 }
 
 #[tauri::command]
-fn typing_set(id: String, on: bool) {
-    let _ = (id, on);
+fn typing_set(core: State<Core>, id: String, on: bool) {
+    core.typing_set(&id, on);
 }
 
 #[tauri::command]
@@ -104,13 +108,27 @@ fn unlock(core: State<Core>, passphrase: Option<String>) -> Result<(), String> {
     core.unlock(passphrase)
 }
 
+/// Události pro UI (`Events` v `types.ts`).
+struct AppSink(AppHandle);
+
+impl Sink for AppSink {
+    fn emit(&self, event: UiEvent) {
+        let _ = self.0.emit(event.name(), &event);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let result = tauri::Builder::default()
         .setup(|app| {
             // Profil v datové složce aplikace; chyba otevření (poškozený soubor) aplikaci nespustí, nic se nepřepíše.
             let dir = app.path().app_data_dir()?;
-            app.manage(Core::persistent(dir, KdfParams::default(), true)?);
+            let core = Core::persistent(dir, KdfParams::default(), true)?;
+            // bez zapečené adresy a klíče Workeru (§13.3) zůstane klient offline
+            if let Some(config) = NetConfig::from_build() {
+                core.go_online(config, Arc::new(AppSink(app.handle().clone())))?;
+            }
+            app.manage(core);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

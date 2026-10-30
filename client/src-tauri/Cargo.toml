@@ -29,6 +29,10 @@ hkdf = "0.12"
 sha2 = "0.10"
 rand = "0.8"
 zeroize = "1"
+# Síť (D3): stejné verze a TLS (rustls + webpki-roots, §13.3) jako `ancord-core`.
+tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
 
 # Android má vlastní Keystore přes Kotlin plugin (D6), `keyring` tam backend nemá.
 [target.'cfg(not(target_os = "android"))'.dependencies]

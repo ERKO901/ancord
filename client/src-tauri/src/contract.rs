@@ -11,9 +11,8 @@ pub enum IdentityState {
     Ready,
 }
 
-#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
-#[allow(dead_code)] // varianty použije online klient (D3)
 pub enum DeliveryState {
     Queued,
     Pending,
@@ -21,10 +20,10 @@ pub enum DeliveryState {
     Unknown,
 }
 
-#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "lowercase")]
-#[allow(dead_code)] // varianty použije online klient (D3)
 pub enum ConnectionState {
+    #[default]
     Offline,
     Connecting,
     Online,
@@ -44,7 +43,7 @@ pub struct IdentityStatus {
     pub passphrase: bool,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct Contact {
     pub id: String,
     pub name: String,
@@ -64,7 +63,7 @@ pub struct ConversationSummary {
     pub last_state: Option<DeliveryState>,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Message {
     pub id: String,
     pub ts: u64,
@@ -92,5 +91,31 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self { theme: ThemeChoice::Dark, enhanced_protection: true, lock_after_secs: 300, notification_preview: false, keep_connection: false }
+    }
+}
+
+/// Události Rust → UI (`Events` v `types.ts`). Název události je `UiEvent::name`, tělo je varianta bez obalu.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum UiEvent {
+    #[serde(rename_all = "camelCase")]
+    MessageReceived { conversation_id: String, message: Message },
+    #[serde(rename_all = "camelCase")]
+    DeliveryState { conversation_id: String, message_id: String, state: DeliveryState },
+    #[serde(rename_all = "camelCase")]
+    Typing { conversation_id: String, on: bool },
+    ConnectionState { state: ConnectionState },
+    ContactRequest { contact: Contact },
+}
+
+impl UiEvent {
+    pub fn name(&self) -> &'static str {
+        match self {
+            UiEvent::MessageReceived { .. } => "message_received",
+            UiEvent::DeliveryState { .. } => "delivery_state",
+            UiEvent::Typing { .. } => "typing",
+            UiEvent::ConnectionState { .. } => "connection_state",
+            UiEvent::ContactRequest { .. } => "contact_request",
+        }
     }
 }

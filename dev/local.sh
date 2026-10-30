@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Lokální vývojové prostředí bez Dockeru a Cloudflare: Worker v `wrangler dev` (mock Cloudflare) + N nodů jako procesy.
 # Tunel nahrazuje local-forward.py (PROOF_ORIGIN a PEER_URL_TEMPLATE). Použití: dev/local.sh [počet nodů, výchozí 6]
+# Porty a složku lze změnit proměnnými WPORT, FPORT, BASE_PORT a RUN_DIR (E2E test klienta).
 set -euo pipefail
 N=${1:-6}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 RUN=${RUN_DIR:-/tmp/ancord-local}
-WPORT=8787; FPORT=8790; BASE_PORT=8100; ADMIN=dev-admin
+WPORT=${WPORT:-8787}; FPORT=${FPORT:-8790}; BASE_PORT=${BASE_PORT:-8100}; ADMIN=dev-admin
 rm -rf "$RUN"; mkdir -p "$RUN/logs"
 trap 'kill 0' EXIT
 
