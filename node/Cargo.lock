@@ -25,6 +25,7 @@ dependencies = [
 name = "ancord-cli"
 version = "0.1.0"
 dependencies = [
+ "ancord-core",
  "ancord-node",
  "base64 0.22.1",
  "clap",
@@ -43,10 +44,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "ancord-core"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "blake3",
+ "chacha20poly1305",
+ "data-encoding",
+ "ed25519-dalek",
+ "futures-util",
+ "hkdf",
+ "rand 0.8.8",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tokio-tungstenite 0.26.2",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
 name = "ancord-node"
 version = "0.1.0"
 dependencies = [
  "ancord-cli",
+ "ancord-core",
  "axum",
  "base64 0.22.1",
  "blake3",

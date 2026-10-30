@@ -1,0 +1,53 @@
+# Samostatný workspace: klient nepatří do `node/` a jeho `cargo test` ani Cargo.lock se nemění.
+[workspace]
+
+[package]
+name = "ancord-client"
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+publish = false
+
+[lib]
+name = "ancord_client_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+# Sdílené jádro (protokolové primitivy, identita, ratchet, síť); bez serverových závislostí nodu.
+ancord-core = { path = "../../node/crates/ancord-core" }
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
+redb = "2"
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+rand = "0.8"
+zeroize = "1"
+
+# Android má vlastní Keystore přes Kotlin plugin (D6), `keyring` tam backend nemá.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+
+[lints.rust]
+# JNI most na Androidu bude v samostatném crate s lokální výjimkou (§13.4).
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[dev-dependencies]
+tempfile = "3"

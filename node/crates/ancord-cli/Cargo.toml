@@ -13,6 +13,7 @@ name = "ancord"
 path = "src/main.rs"
 
 [dependencies]
+ancord-core = { path = "../ancord-core" }
 ancord-node = { path = "../ancord-node" }
 base64.workspace = true
 clap.workspace = true

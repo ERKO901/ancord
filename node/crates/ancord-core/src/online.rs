@@ -5,11 +5,11 @@
 
 use std::time::Duration;
 
-use ancord_node::encoding::{b64u_decode_array, b64u_encode};
-use ancord_node::user::{inbox_id, UserKeys};
+use crate::encoding::{b64u_decode_array, b64u_encode};
+use crate::user::{inbox_id, UserKeys};
 use serde_json::{json, Value};
 
-use crate::{ack_inbox, now_s, process_inbox, publish_profile, rpc, CliError, NodeSocket, Session};
+use crate::net::{ack_inbox, now_s, process_inbox, publish_profile, rpc, CliError, NodeSocket, Session};
 
 /// Nejvýše tolik odběrů na jedno spojení (spec §13.3); jeden patří schránce.
 pub const MAX_SUBSCRIPTIONS: usize = 32;
@@ -48,7 +48,7 @@ pub struct Online {
 impl Online {
     pub fn new(keys: UserKeys, conversations: Vec<Session>, pow_bits: u32) -> Self {
         let watched = vec![false; conversations.len()];
-        Self { keys, conversations, pow_bits, inbox_bits: crate::INBOX_POW_BITS, watched }
+        Self { keys, conversations, pow_bits, inbox_bits: crate::net::INBOX_POW_BITS, watched }
     }
 
     fn inbox(&self) -> [u8; 32] {
@@ -63,7 +63,7 @@ impl Online {
             store.save_keys(&self.keys)?;
         }
         publish_profile(ws, &self.keys, self.pow_bits).await?;
-        crate::publish_guard(ws, &self.keys, self.inbox_bits).await?;
+        crate::net::publish_guard(ws, &self.keys, self.inbox_bits).await?;
         self.watched = vec![false; self.conversations.len()];
         let mut ids = vec![b64u_encode(&self.inbox())];
         let mut skipped = Vec::new();
@@ -116,7 +116,7 @@ impl Online {
         if self.conversations.iter().any(|s| s.peer.as_deref() == Some(address.as_str())) {
             return Err(CliError::Session("a conversation with this address already exists".into()));
         }
-        let session = crate::start_conversation(ws, &self.keys, peer).await?;
+        let session = crate::net::start_conversation(ws, &self.keys, peer).await?;
         let index = self.conversations.len();
         store.add_conversation(index, &session)?;
         self.conversations.push(session);
@@ -211,7 +211,7 @@ impl Online {
         let mut sent = 0;
         for index in 0..self.conversations.len() {
             let session = &mut self.conversations[index];
-            if crate::keepalive_if_due(ws, session, crate::KEEPALIVE_DELAY_S, |s| store.save_conversation(index, s)).await? {
+            if crate::net::keepalive_if_due(ws, session, crate::net::KEEPALIVE_DELAY_S, |s| store.save_conversation(index, s)).await? {
                 sent += 1;
             }
         }
@@ -223,7 +223,7 @@ impl Online {
         let session = self.conversations.get_mut(index).ok_or_else(|| CliError::Session("no such conversation".into()))?;
         let prepared = session.prepare(text)?;
         store.save_conversation(index, session)?;
-        crate::transmit(ws, &prepared).await?;
+        crate::net::transmit(ws, &prepared).await?;
         Ok(prepared.id)
     }
 }

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 
-use crate::encoding::{b64u_decode_array, b64u_encode, base32_encode};
+use crate::encoding::{b64u_decode_array, b64u_encode};
 use crate::error::NodeError;
 
 pub const KEY_FILE: &str = "identity.key";
@@ -76,9 +76,7 @@ impl Identity {
     }
 }
 
-pub fn node_id_of(pubkey: &[u8; 32]) -> String {
-    base32_encode(blake3::hash(pubkey).as_bytes())
-}
+pub use ancord_core::ticket::node_id_of;
 
 pub fn hostname_of(node_id: &str, zone: &str) -> String {
     let prefix: String = node_id.chars().take(HOSTNAME_ID_CHARS).collect();

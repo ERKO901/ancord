@@ -84,6 +84,12 @@ impl ApiError {
     }
 }
 
+impl From<ancord_core::error::ProofError> for ApiError {
+    fn from(e: ancord_core::error::ProofError) -> Self {
+        Self::from(DataError::from(e))
+    }
+}
+
 impl From<DataError> for ApiError {
     fn from(e: DataError) -> Self {
         match e {

@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Jen příkazy kontraktu (§13.5) a události. Žádné pluginy fs, shell, http, opener, updater ani global-shortcut.",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:default",
+    "allow-identity-status", "allow-identity-create", "allow-address-get", "allow-address-qr",
+    "allow-contact-add", "allow-contact-list", "allow-contact-safety-number", "allow-contact-mark-verified",
+    "allow-conversation-list", "allow-conversation-open", "allow-message-send", "allow-typing-set", "allow-conversation-delete",
+    "allow-connection-state", "allow-settings-get", "allow-settings-set", "allow-lock", "allow-unlock"
+  ]
+}

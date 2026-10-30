@@ -49,6 +49,15 @@ pub enum DataError {
     Storage,
 }
 
+impl From<ancord_core::error::ProofError> for DataError {
+    fn from(e: ancord_core::error::ProofError) -> Self {
+        match e {
+            ancord_core::error::ProofError::BadRequest(m) => Self::BadRequest(m),
+            ancord_core::error::ProofError::InvalidProof => Self::InvalidProof,
+        }
+    }
+}
+
 impl DataError {
     /// Stabilní kód z `spec/PROTOCOL.md` §13.3.
     pub fn code(&self) -> &'static str {

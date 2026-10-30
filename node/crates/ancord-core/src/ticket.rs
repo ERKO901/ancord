@@ -10,6 +10,11 @@ use crate::canonical::canonical_bytes;
 use crate::encoding::{b64u_decode, b64u_decode_array};
 use crate::sign::{self, DOMAIN_DIRECTORY, DOMAIN_TICKET};
 
+/// `node_id` = `base32(blake3(pubkey))` (spec §3).
+pub fn node_id_of(pubkey: &[u8; 32]) -> String {
+    crate::encoding::base32_encode(blake3::hash(pubkey).as_bytes())
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct TicketBody {
     pub v: u64,

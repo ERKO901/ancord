@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ancord_cli::online::{Online, OnlineEvent, Persist};
-use ancord_cli::{
+use ancord_cli::{save_session,
     ack_inbox, address, connect_any, keepalive_if_due, KEEPALIVE_DELAY_S, create_user, default_url, fetch_route, load_user, lock_file, lookup_profile, message_status, next_event, parse_address,
     process_inbox, publish_profile, receive, register_push, safety, save_user, send_typing, start_conversation, subscribe, transmit, write_private, CliError,
     Event, NodeSocket, Role, Route, RouteNode, Session,
@@ -131,7 +131,7 @@ async fn open(cli: &Cli, ek: &SigningKey, route: &Route) -> Result<(RouteNode, N
 }
 
 fn load_session(file: &Path) -> Result<Session, Box<dyn std::error::Error>> {
-    Ok(Session::load(file)?)
+    Ok(ancord_cli::load_session(file)?)
 }
 
 fn now() -> u64 {
@@ -212,7 +212,7 @@ impl Persist for DirStore {
 
     fn save_conversation(&mut self, index: usize, session: &Session) -> Result<(), CliError> {
         let path = self.paths.get(index).ok_or_else(|| CliError::Session("no such conversation".into()))?;
-        session.save(path)
+        save_session(session, path)
     }
 
     fn add_conversation(&mut self, _index: usize, session: &Session) -> Result<(), CliError> {
@@ -220,7 +220,7 @@ impl Persist for DirStore {
         self.next_name = None;
         self.locks.push(lock_file(&path)?);
         write_private(&path, "", true)?;
-        session.save(&path)?;
+        save_session(session, &path)?;
         self.paths.push(path);
         Ok(())
     }
@@ -373,7 +373,7 @@ async fn run_online(cli: &Cli, user: &Path, dir: &Path, pow_bits: u32) -> Result
     let mut sessions = Vec::new();
     for p in &paths {
         locks.push(lock_file(p)?);
-        sessions.push(Session::load(p)?);
+        sessions.push(load_session(p)?);
     }
     let mut ctx = OnlineCtx {
         cli,
@@ -434,7 +434,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             RoleArg::Initiator => Role::Initiator,
             RoleArg::Responder => Role::Responder,
         };
-        Session::new(secret, role)?.save(file)?;
+        save_session(&Session::new(secret, role)?, file)?;
         println!("secret {}", b64u_encode(&secret));
         return Ok(());
     }
@@ -465,7 +465,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             std::fs::create_dir_all(dir)?;
             let push = PushConfig { platform: platform.clone(), token: token.clone() };
             write_private(&dir.join(PUSH_FILE), &serde_json::to_string_pretty(&push)?, false)?;
-            let sessions = conversation_files(dir)?.iter().map(|p| Session::load(p)).collect::<Result<Vec<_>, _>>()?;
+            let sessions = conversation_files(dir)?.iter().map(|p| load_session(p)).collect::<Result<Vec<_>, _>>()?;
             let all: Vec<&Session> = sessions.iter().collect();
             register_all(&cli, &reqwest::Client::new(), &push, &keys, &all, true).await?;
             println!("push token registered for the inbox and {} conversation(s)", all.len());
@@ -533,7 +533,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let (_, mut ws) = open(&cli, &ek, &route).await?;
             let session = start_conversation(&mut ws, &keys, &pk).await;
             ws.close().await;
-            session?.save(conversation)?;
+            save_session(&session?, conversation)?;
             println!("conversation saved to {}", conversation.display());
             println!("safety number {}", safety(&keys, &pk));
         }
@@ -556,7 +556,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("{} already exists, keeping the existing conversation", file.display());
                     continue;
                 }
-                a.session.save(&file)?;
+                save_session(&a.session, &file)?;
                 println!("new conversation with {}\nsafety number {}", b64u_encode(&a.peer), safety(&keys, &a.peer));
             }
             save_user(&keys, user)?;
@@ -588,7 +588,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Send { file, text } => {
             let mut session = load_session(file)?;
             let prepared = session.prepare(text.as_bytes())?;
-            session.save(file)?;
+            save_session(&session, file)?;
             let (node, mut ws) = open(&cli, &ek, &route).await?;
             let acks = transmit(&mut ws, &prepared).await?;
             println!("sent via {} ({acks} anchors confirmed), id {}", node.hostname, b64u_encode(&prepared.id));
@@ -599,7 +599,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let (_, mut ws) = open(&cli, &ek, &route).await?;
             let received = receive(&mut ws, &mut session).await;
             // stav ratchetu se ukládá i po chybě sítě: dešifrované zprávy už jsou „spotřebované“
-            session.save(file)?;
+            save_session(&session, file)?;
             let received = received?;
             for m in &received.messages {
                 println!("{}", String::from_utf8_lossy(m));
@@ -608,7 +608,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("{} message(s) could not be decrypted", received.rejected);
             }
             // jednorázový příkaz nečeká na odpověď uživatele: nový ratchet klíč předá hned (spec §13.2)
-            keepalive_if_due(&mut ws, &mut session, 0, |s| s.save(file)).await?;
+            keepalive_if_due(&mut ws, &mut session, 0, |s| save_session(s, file)).await?;
             ws.close().await;
         }
         Cmd::Watch { file } => {
@@ -618,7 +618,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             // nejdřív odběr (anchory pak posílají nové zprávy rovnou), pak zprávy, které čekaly offline
             subscribe(&mut ws, &session).await?;
             let backlog = receive(&mut ws, &mut session).await;
-            session.save(file)?;
+            save_session(&session, file)?;
             for m in &backlog?.messages {
                 println!("{}", String::from_utf8_lossy(m));
             }
@@ -628,13 +628,13 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     _ = tokio::signal::ctrl_c() => break,
                 };
                 // stav ratchetu se ukládá po každé zprávě
-                session.save(file)?;
+                save_session(&session, file)?;
                 match pushed? {
                     Some(Event::Message(m)) => println!("{}", String::from_utf8_lossy(&m)),
                     Some(Event::Typing(on)) => eprintln!("{}", if on { "(typing…)" } else { "(stopped typing)" }),
                     None => {
                         ws.send_json(&serde_json::json!({"t": "ping"})).await?;
-                        keepalive_if_due(&mut ws, &mut session, KEEPALIVE_DELAY_S, |s| s.save(file)).await?;
+                        keepalive_if_due(&mut ws, &mut session, KEEPALIVE_DELAY_S, |s| save_session(s, file)).await?;
                     }
                 }
             }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-contact-safety-number"
+description = "Enables the contact_safety_number command without any pre-configured scope."
+commands.allow = ["contact_safety_number"]
+
+[[permission]]
+identifier = "deny-contact-safety-number"
+description = "Denies the contact_safety_number command without any pre-configured scope."
+commands.deny = ["contact_safety_number"]

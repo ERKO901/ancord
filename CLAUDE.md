@@ -6,7 +6,8 @@ Decentralizovaná síť pro E2E šifrované zprávy. Nody provozuje kdokoli, Clo
 
 ## Struktura
 - `worker/` – load balancer a control plane (Cloudflare Worker, TypeScript)
-- `node/` – node (Rust)
+- `node/` – node (Rust); `crates/ancord-core` je sdílené jádro nodu a klienta, `ancord-cli` souborový CLI klient
+- `client/` – grafický klient (Tauri 2 + Svelte), fáze D, viz `client/README.md`
 - `spec/` – `PROTOCOL.md`, `THREAT_MODEL.md`, `test-vectors/` (jediné, co sdílejí worker a node)
 - `dev/` – Docker Compose se 6 nody připojenými přes Cloudflare Tunnel
 
@@ -76,6 +77,6 @@ Rules:
   - Výstup `[!] TRUNCATED` neznamená odpověď; zúžit `--seed`, ne zvyšovat `--budget` na tisíce.
   - Uzly `src= loc=` bez zdroje (`json`, `arc`, `mpsc`) jsou externí závislosti, přeskočit.
 - Graf nezná obsah `spec/test-vectors/*.json` ani konfigurace (`package.json`, `tsconfig`, `Cargo.toml`, jsou v `.graphifyignore`). Formáty hledejte v `spec/PROTOCOL.md`, závislosti přímo v souborech.
-- `graphify` nemusí být nainstalovaný (cloudové/čisté prostředí: `pip install graphifyy`). Hooky v `.claude/settings.json` pak tiše nic nedělají; v tom případě hledejte běžným Grep/Read.
+- `graphify` nemusí být nainstalovaný (cloudové/čisté prostředí: `pipx install graphifyy`, binárka je v `~/.local/bin`; `cargo` je v `~/.cargo/bin`, ani jedno nemusí být v PATH). Hooky v `.claude/settings.json` pak tiše nic nedělají; v tom případě hledejte běžným Grep/Read.
 - Pro průzkum kódu nespouštěj `Explore` subagenty; použij graphify a cílená čtení v hlavní session.
 - Po změně kódu spusť `graphify update .` (git hooky přestavují graf jen při commitu/checkoutu). Hooky v `.git/hooks` se negitují: v nové kopii repa je nainstaluj `graphify hook install`.
