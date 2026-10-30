@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, go, saveSettings, lockNow } from "../lib/app.svelte";
+  import { app, go, saveSettings, lockNow, setBiometric, errText } from "../lib/app.svelte";
   import type { ThemeChoice } from "../lib/types";
   import Header from "../lib/ui/Header.svelte";
   import Icon from "../lib/ui/Icon.svelte";
@@ -49,6 +49,12 @@
               {/each}
             </div>
           </div>
+          {#if app.bio.available}
+            <div class="setting">
+              <span class="t"><strong>Odemykat biometrikou</strong><span>Otiskem nebo obličejem místo hesla. Heslo zůstává jako záloha, třeba po přidání nového otisku.</span></span>
+              <Switch label="Odemykat biometrikou" checked={app.bio.enabled} onchange={(v) => void setBiometric(v).catch((e) => (app.error = errText(e)))} />
+            </div>
+          {/if}
           <button class="setting" onclick={() => void lockNow()}>
             <span class="lead"><Icon name="lock" size={20} /></span>
             <span class="t"><strong>Zamknout teď</strong><span>Obsah zpráv zmizí z paměti aplikace.</span></span>

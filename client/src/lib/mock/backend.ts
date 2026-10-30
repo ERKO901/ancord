@@ -9,6 +9,8 @@ export interface MockOptions {
   /** Počet zpráv v konverzaci „Zátěž“ (měření virtuálního seznamu, §13.11). */
   stressMessages?: number;
   seed?: boolean;
+  /** Simulované zařízení s biometrikou (výchozí zapnuto) a jestli ji má profil zapnutou. */
+  biometric?: boolean;
   /** Prodleva simulované odpovědi protistrany v ms, 0 = bez odpovědi. */
   replyMs?: number;
 }
@@ -47,6 +49,8 @@ export function createMockBackend(opts: MockOptions = {}) {
   let settings: Settings = {
     theme: "dark", enhancedProtection: true, lockAfterSecs: 300, notificationPreview: false, keepConnection: false,
   };
+  let bioEnabled = false;
+  let bioAllow = true;
   const myAddress = `ancord:${b64u(43)}`;
   let seq = 0;
   const id = () => `m${++seq}`;
@@ -165,10 +169,26 @@ export function createMockBackend(opts: MockOptions = {}) {
       if (identity.passphrase && p !== passphrase) throw "Špatné heslo";
       identity = { ...identity, state: "ready" };
     },
+    biometric_status: () => ({ available: opts.biometric !== false && identity.passphrase, enabled: bioEnabled && identity.passphrase }),
+    biometric_enable: () => {
+      if (!bioAllow) throw "Biometrika byla zrušena nebo selhala";
+      bioEnabled = true;
+    },
+    biometric_disable: () => {
+      bioEnabled = false;
+    },
+    unlock_biometric: () => {
+      if (!bioEnabled || !bioAllow) throw "Biometrika byla zrušena nebo už neplatí. Odemkněte heslem.";
+      identity = { ...identity, state: "ready" };
+    },
   };
 
   return {
     handlers,
+    /** Simulace zrušeného dotazu na biometriku. */
+    setBiometricAllowed(v: boolean) {
+      bioAllow = v;
+    },
     setConnection(state: ConnectionState) {
       conn = state;
       void emit("connection_state", { state });

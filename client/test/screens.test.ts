@@ -162,4 +162,42 @@ describe("obrazovky (D4: každá se vykreslí a reaguje)", () => {
     await click("Odemknout");
     expect(text()).toContain("Alice");
   });
+
+  it("biometrika: u profilu bez hesla není, s heslem se zapne a zamčeno jde odemknout; zrušení nechá heslo", async () => {
+    // bez hesla volba v nastavení není
+    await start();
+    await click("Nastavení");
+    expect(text()).not.toContain("Odemykat biometrikou");
+
+    // profil s heslem
+    const backend = await start({ seed: false });
+    await click("Začít");
+    await click("Další");
+    await click("Přeskočit");
+    await click("Chránit heslem");
+    const [p1, p2] = document.querySelectorAll<HTMLInputElement>("input[type=password]");
+    if (!p1 || !p2) throw new Error("chybí pole hesla");
+    for (const el of [p1, p2]) { el.value = "tajne-heslo"; el.dispatchEvent(new Event("input", { bubbles: true })); }
+    await settle();
+    await click("Vytvořit identitu");
+    await click("Nastavení");
+    expect(text()).toContain("Odemykat biometrikou");
+    await click("Odemykat biometrikou");
+    expect(app.bio.enabled).toBe(true);
+
+    // zamčeno: biometrika se nabídne sama a odemkne
+    await click("Zamknout teď");
+    await settle();
+    expect(text()).not.toContain("Zamčeno");
+    expect(text()).toContain("Chaty");
+
+    // zrušená biometrika: zůstane zamčeno, objeví se pole hesla a chyba
+    backend.setBiometricAllowed(false);
+    await click("Nastavení");
+    await click("Zamknout teď");
+    await settle();
+    expect(text()).toContain("Zamčeno");
+    expect(document.querySelector("input[type=password]")).not.toBeNull();
+    expect(document.querySelector("[role=alert]")?.textContent).toContain("Biometrika");
+  });
 });

@@ -28,3 +28,9 @@
   @android.webkit.JavascriptInterface public <methods>;
 }
 -keep class cz.melonet.ancord.SyncReceiver { *; }
+-keep class cz.melonet.ancord.BiometricKey {
+  public static boolean available();
+  public static void forget();
+  public static byte[] wrap(byte[]);
+  public static byte[] unwrap(byte[]);
+}

@@ -140,3 +140,10 @@ impl UiEvent {
         }
     }
 }
+
+/// Biometrické odemykání profilu s heslem: `available` = zařízení má silnou biometrii a profil heslo, `enabled` = je zapnuté.
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct BiometricStatus {
+    pub available: bool,
+    pub enabled: bool,
+}

@@ -15,12 +15,14 @@ use ancord_core::net::{CliError, Session};
 use ancord_core::online::Persist;
 use ancord_core::user::{address_uri, parse_address, safety_number, UserKeys};
 use rand::RngCore;
+use zeroize::Zeroizing;
 
 use crate::net::{Cmd, Link, NetConfig, Sink};
 use crate::store::{AutoDeviceKey, DeviceKey, FileDeviceKey, KdfParams, Store, StoreError, Table};
 use serde::{Deserialize, Serialize};
 
 use crate::contract::{
+    BiometricStatus,
     ConnectionState, Contact, ConversationPage, ConversationSummary, DeliveryState, IdentityState, IdentityStatus, Message,
     Settings, UiEvent,
 };
@@ -79,9 +81,22 @@ type Network = (Arc<NetConfig>, Arc<dyn Sink>);
 /// Odeslané zprávy jedné konverzace, které čekají na doručení: `(klíč záznamu, id v síti)`.
 pub(crate) type Awaiting = Vec<(String, [u8; 16])>;
 
+/// Obálka hlavního klíče klíčem, který vydá jen biometrika (na Androidu `BiometricKey.kt`). Volání blokují, dokud uživatel
+/// nepotvrdí otiskem nebo obličejem, a nesmí běžet s drženým zámkem stavu ani na hlavním vlákně.
+pub trait BiometricKey: Send + Sync {
+    fn available(&self) -> bool;
+    fn wrap(&self, plain: &[u8]) -> Result<Vec<u8>, String>;
+    fn unwrap(&self, blob: &[u8]) -> Result<Zeroizing<Vec<u8>>, String>;
+    /// Smaže klíč z Keystore.
+    fn forget(&self);
+}
+
+const BIO_FILE: &str = "bio.blob";
+
 #[derive(Default)]
 pub struct Core {
     shared: Shared,
+    bio: Option<Arc<dyn BiometricKey>>,
     /// Složka profilu; `None` = jen paměť.
     dir: Option<PathBuf>,
     kdf: KdfParams,
@@ -330,6 +345,12 @@ impl Core {
         Ok(core)
     }
 
+    #[cfg_attr(not(any(target_os = "android", test)), allow(dead_code, reason = "biometrika jen na Androidu (D6)"))]
+    pub fn with_biometric(mut self, bio: Arc<dyn BiometricKey>) -> Self {
+        self.bio = Some(bio);
+        self
+    }
+
     /// Zapne síť: od teď (a po každém odemčení) běží online klient a hlásí události do `sink`.
     pub fn go_online(&self, config: NetConfig, sink: Arc<dyn Sink>) -> Result<(), String> {
         *self.network.lock().map_err(|_| lock_err())? = Some((Arc::new(config), sink));
@@ -399,6 +420,11 @@ impl Core {
     fn open_profile(&self, s: &mut Inner, passphrase: Option<&str>) -> Result<(), String> {
         let device = self.device_key()?;
         let store = Store::open(&self.profile_path()?, &device as &dyn DeviceKey, passphrase).map_err(|e| e.to_string())?;
+        Self::load_profile(s, store)
+    }
+
+    /// Načte z otevřeného úložiště identitu, kontakty a nastavení do paměti.
+    fn load_profile(s: &mut Inner, store: Store) -> Result<(), String> {
         let keys = store
             .get(Table::Identity, IDENTITY_KEY)
             .map_err(|e| e.to_string())?
@@ -663,6 +689,62 @@ impl Core {
         })
     }
 
+    fn bio_path(&self) -> Result<PathBuf, String> {
+        self.dir.as_ref().map(|d| d.join(BIO_FILE)).ok_or_else(|| "Profil není uložený".to_string())
+    }
+
+    pub fn biometric_status(&self) -> Result<BiometricStatus, String> {
+        let passphrase = self.with(|s| Ok(s.has_profile && s.passphrase))?;
+        let available = passphrase && self.dir.is_some() && self.bio.as_ref().is_some_and(|b| b.available());
+        let enabled = available && self.bio_path()?.is_file();
+        Ok(BiometricStatus { available, enabled })
+    }
+
+    /// Zapne biometrické odemykání; vyžaduje odemčený profil s heslem a jedno potvrzení biometrikou.
+    pub fn biometric_enable(&self) -> Result<(), String> {
+        let bio = self.bio.clone().ok_or("Biometrika na tomto zařízení není k dispozici")?;
+        let store = self.with(|s| match (&s.store, s.passphrase) {
+            (Some(st), true) => Ok(st.clone()),
+            (_, false) => Err("Biometrika se dá zapnout jen u profilu s heslem".to_string()),
+            _ => Err("Aplikace je zamčená".to_string()),
+        })?;
+        // bez drženého zámku stavu: čeká se na uživatele
+        let blob = bio.wrap(store.master_key().as_ref())?;
+        let path = self.bio_path()?;
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, &blob).and_then(|()| std::fs::rename(&tmp, &path)).map_err(|e| e.to_string())
+    }
+
+    pub fn biometric_disable(&self) -> Result<(), String> {
+        if let Some(bio) = &self.bio {
+            bio.forget();
+        }
+        match std::fs::remove_file(self.bio_path()?) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// Odemkne profil s heslem biometrikou. Při zrušení nebo neplatném klíči (nový otisk) zůstane zamčeno a jde heslem.
+    pub fn unlock_biometric(&self) -> Result<(), String> {
+        let bio = self.bio.clone().ok_or("Biometrika na tomto zařízení není k dispozici")?;
+        let blob = std::fs::read(self.bio_path()?).map_err(|_| "Biometrické odemykání není zapnuté".to_string())?;
+        let master = bio.unwrap(&blob)?;
+        self.with(|s| {
+            if !s.has_profile || !s.passphrase {
+                return Err("Biometrika se použije jen u profilu s heslem".to_string());
+            }
+            if s.store.is_none() {
+                let store = Store::open_with_master(&self.profile_path()?, master.as_ref()).map_err(|e| e.to_string())?;
+                Self::load_profile(s, store)?;
+            }
+            s.locked = false;
+            Ok(())
+        })?;
+        self.ensure_link()
+    }
+
     pub fn unlock(&self, passphrase: Option<String>) -> Result<(), String> {
         self.with(|s| {
             if !s.has_profile {
@@ -842,5 +924,69 @@ mod tests {
         assert!(b.contact_list().is_err());
         b.unlock(Some("heslo".into())).unwrap();
         assert_eq!(b.address_get().unwrap(), addr);
+    }
+
+    /// Náhrada Keystore: „biometrika“ jen zamění bajty a dá se vypnout (zrušení dotazu).
+    struct FakeBio {
+        allow: std::sync::atomic::AtomicBool,
+    }
+
+    impl BiometricKey for FakeBio {
+        fn available(&self) -> bool {
+            true
+        }
+        fn wrap(&self, plain: &[u8]) -> Result<Vec<u8>, String> {
+            self.allow.load(std::sync::atomic::Ordering::SeqCst).then(|| plain.iter().map(|b| b ^ 0x5a).collect()).ok_or_else(|| "zrušeno".to_string())
+        }
+        fn unwrap(&self, blob: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
+            self.allow.load(std::sync::atomic::Ordering::SeqCst).then(|| Zeroizing::new(blob.iter().map(|b| b ^ 0x5a).collect())).ok_or_else(|| "zrušeno".to_string())
+        }
+        fn forget(&self) {}
+    }
+
+    #[test]
+    fn biometric_unlocks_only_a_passphrase_profile_and_password_still_works() {
+        let dir = tempfile::tempdir().unwrap();
+        let bio = Arc::new(FakeBio { allow: true.into() });
+        let a = Core::persistent(dir.path().to_path_buf(), FAST, false).unwrap().with_biometric(bio.clone());
+        // bez profilu s heslem není co zapnout
+        assert!(!a.biometric_status().unwrap().available);
+        let addr = a.identity_create(Some("heslo".into())).unwrap();
+        assert_eq!(a.biometric_status().unwrap(), BiometricStatus { available: true, enabled: false });
+        a.biometric_enable().unwrap();
+        assert_eq!(a.biometric_status().unwrap(), BiometricStatus { available: true, enabled: true });
+
+        a.lock().unwrap();
+        assert!(a.address_get().is_err());
+        // zrušená biometrika nic neodemkne, profil zůstane zamčený a heslo funguje
+        bio.allow.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(a.unlock_biometric().is_err());
+        assert_eq!(a.identity_status().unwrap().state, IdentityState::Locked);
+        bio.allow.store(true, std::sync::atomic::Ordering::SeqCst);
+        a.unlock_biometric().unwrap();
+        assert_eq!(a.address_get().unwrap(), addr);
+
+        // po restartu aplikace (nové jádro nad stejnou složkou)
+        drop(a);
+        let b = Core::persistent(dir.path().to_path_buf(), FAST, false).unwrap().with_biometric(bio);
+        assert_eq!(b.identity_status().unwrap().state, IdentityState::Locked);
+        b.unlock_biometric().unwrap();
+        assert_eq!(b.address_get().unwrap(), addr);
+
+        b.biometric_disable().unwrap();
+        b.lock().unwrap();
+        assert!(b.unlock_biometric().is_err());
+        b.unlock(Some("heslo".into())).unwrap();
+    }
+
+    #[test]
+    fn biometric_is_refused_for_a_profile_without_passphrase() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = Core::persistent(dir.path().to_path_buf(), FAST, false)
+            .unwrap()
+            .with_biometric(Arc::new(FakeBio { allow: true.into() }));
+        a.identity_create(None).unwrap();
+        assert!(!a.biometric_status().unwrap().available);
+        assert!(a.biometric_enable().is_err());
     }
 }

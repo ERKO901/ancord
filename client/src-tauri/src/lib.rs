@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 use crate::contract::{
-    ConnectionState, Contact, ConversationPage, ConversationSummary, IdentityStatus, Message, Settings, UiEvent,
+    BiometricStatus, ConnectionState, Contact, ConversationPage, ConversationSummary, IdentityStatus, Message, Settings, UiEvent,
 };
 use crate::core::Core;
 use crate::net::{NetConfig, Sink};
@@ -124,6 +124,35 @@ fn unlock(core: State<Core>, window: WebviewWindow, passphrase: Option<String>) 
     Ok(())
 }
 
+#[tauri::command]
+fn biometric_status(core: State<Core>) -> Result<BiometricStatus, String> {
+    core.biometric_status()
+}
+
+// Příkazy s dotazem na biometriku čekají na uživatele: musí být `async` a běžet mimo hlavní vlákno (sync příkazy běží na něm,
+// a BiometricPrompt se zobrazuje právě tam, takže by blokování způsobilo deadlock).
+#[tauri::command]
+async fn biometric_enable(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<Core>().biometric_enable())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn biometric_disable(core: State<Core>) -> Result<(), String> {
+    core.biometric_disable()
+}
+
+#[tauri::command]
+async fn unlock_biometric(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || handle.state::<Core>().unlock_biometric()).await.map_err(|e| e.to_string())??;
+    if let Ok(settings) = app.state::<Core>().settings_get() {
+        apply_protection(&window, settings.enhanced_protection);
+    }
+    Ok(())
+}
+
 /// Události pro UI (`Events` v `types.ts`).
 struct AppSink(AppHandle);
 
@@ -160,6 +189,8 @@ pub fn run() {
             // Profil v datové složce aplikace; chyba otevření (poškozený soubor) aplikaci nespustí, nic se nepřepíše.
             let dir = app.path().app_data_dir()?;
             let core = Core::persistent(dir, KdfParams::default(), true)?;
+            #[cfg(target_os = "android")]
+            let core = core.with_biometric(Arc::new(android_keystore::AndroidBiometric));
             // bez zapečené adresy a klíče Workeru (§13.3) zůstane klient offline
             if let Some(config) = NetConfig::from_build() {
                 core.go_online(config, Arc::new(AppSink(app.handle().clone())))?;
@@ -177,6 +208,7 @@ pub fn run() {
             contact_add, contact_list, contact_safety_number, contact_mark_verified,
             conversation_list, conversation_open, message_send, typing_set, conversation_delete,
             connection_state, settings_get, settings_set, lock, unlock,
+            biometric_status, biometric_enable, biometric_disable, unlock_biometric,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

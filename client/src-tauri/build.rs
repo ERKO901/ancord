@@ -6,6 +6,7 @@ const COMMANDS: &[&str] = &[
     "contact_add", "contact_list", "contact_safety_number", "contact_mark_verified",
     "conversation_list", "conversation_open", "message_send", "typing_set", "conversation_delete",
     "connection_state", "settings_get", "settings_set", "lock", "unlock",
+    "biometric_status", "biometric_enable", "biometric_disable", "unlock_biometric",
 ];
 
 fn main() {

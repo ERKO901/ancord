@@ -95,6 +95,8 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
+    // biometrické odemykání profilu s heslem (systémový dotaz, bez Google Play služeb)
+    implementation("androidx.biometric:biometric:1.1.0")
     // skener QR: kamera přes CameraX, dekódování čistě lokálně (zxing-core, žádné Google Play služby)
     implementation("androidx.camera:camera-core:1.4.2")
     implementation("androidx.camera:camera-camera2:1.4.2")

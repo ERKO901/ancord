@@ -1,6 +1,6 @@
 import { call, on } from "./ipc";
 import type {
-  ConnectionIssue, ConnectionState, Contact, ConversationSummary, IdentityStatus, Message, Settings,
+  BiometricStatus, ConnectionIssue, ConnectionState, Contact, ConversationSummary, IdentityStatus, Message, Settings,
 } from "./types";
 
 export type View = "list" | "chat" | "contacts" | "contact" | "add" | "settings" | "me" | "about";
@@ -13,6 +13,7 @@ export const app = $state({
   conn: "offline" as ConnectionState,
   connIssue: null as ConnectionIssue | null,
   settings: null as Settings | null,
+  bio: { available: false, enabled: false } as BiometricStatus,
   conversations: [] as ConversationSummary[],
   contacts: [] as Contact[],
   view: "list" as View,
@@ -35,6 +36,7 @@ export async function boot(): Promise<void> {
   app.identity = await call("identity_status");
   app.settings = await call("settings_get");
   app.conn = await call("connection_state");
+  await refreshBio();
   if (app.identity.state === "ready") await enterReady();
   app.ready = true;
 }
@@ -69,11 +71,28 @@ async function enterReady(): Promise<void> {
 export async function createIdentity(passphrase?: string): Promise<void> {
   await call("identity_create", passphrase ? { passphrase } : {});
   app.identity = await call("identity_status");
+  await refreshBio();
   await enterReady();
 }
 
 export async function unlock(passphrase?: string): Promise<void> {
   await call("unlock", passphrase ? { passphrase } : {});
+  app.identity = await call("identity_status");
+  await enterReady();
+}
+
+export async function refreshBio(): Promise<void> {
+  app.bio = await call("biometric_status").catch(() => ({ available: false, enabled: false }));
+}
+
+/** Zapne nebo vypne biometrické odemykání; zapnutí vyžaduje potvrzení biometrikou. */
+export async function setBiometric(on: boolean): Promise<void> {
+  await call(on ? "biometric_enable" : "biometric_disable");
+  await refreshBio();
+}
+
+export async function unlockWithBiometric(): Promise<void> {
+  await call("unlock_biometric");
   app.identity = await call("identity_status");
   await enterReady();
 }
@@ -88,6 +107,7 @@ export async function lockNow(): Promise<void> {
   app.chatId = null;
   app.contactId = null;
   app.view = "list";
+  await refreshBio();
 }
 
 export async function refreshList(): Promise<void> {

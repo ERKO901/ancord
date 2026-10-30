@@ -52,6 +52,12 @@ export interface Settings {
   keepConnection: boolean;
 }
 
+/** Biometrické odemykání profilu s heslem: `available` = zařízení ho umí a profil má heslo, `enabled` = je zapnuté. */
+export interface BiometricStatus {
+  available: boolean;
+  enabled: boolean;
+}
+
 export interface ConversationPage {
   messages: Message[];
   /** Zbývají starší zprávy. */
@@ -78,6 +84,10 @@ export interface Commands {
   settings_set: [{ settings: Settings }, void];
   lock: [void, void];
   unlock: [{ passphrase?: string }, void];
+  biometric_status: [void, BiometricStatus];
+  biometric_enable: [void, void];
+  biometric_disable: [void, void];
+  unlock_biometric: [void, void];
 }
 
 /** Události Rust → UI. */
@@ -95,4 +105,5 @@ export const COMMAND_NAMES = [
   "contact_add", "contact_list", "contact_safety_number", "contact_mark_verified",
   "conversation_list", "conversation_open", "message_send", "typing_set", "conversation_delete",
   "connection_state", "settings_get", "settings_set", "lock", "unlock",
+  "biometric_status", "biometric_enable", "biometric_disable", "unlock_biometric",
 ] as const satisfies readonly (keyof Commands)[];

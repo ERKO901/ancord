@@ -13,11 +13,13 @@ use jni::JavaVM;
 use rand::RngCore;
 use zeroize::Zeroizing;
 
+use crate::core::BiometricKey;
 use crate::store::{DeviceKey, StoreError};
 
 struct Bridge {
     vm: JavaVM,
     class: GlobalRef,
+    bio: GlobalRef,
 }
 
 static BRIDGE: OnceLock<Bridge> = OnceLock::new();
@@ -25,12 +27,14 @@ static BRIDGE: OnceLock<Bridge> = OnceLock::new();
 #[allow(unsafe_code, reason = "JNI_OnLoad je vstupní bod knihovny (§13.4)")]
 #[no_mangle]
 pub extern "system" fn JNI_OnLoad(vm: JavaVM, _reserved: *mut c_void) -> jint {
-    let class = vm.get_env().ok().and_then(|mut env| {
+    let classes = vm.get_env().ok().and_then(|mut env| {
         let class = env.find_class("cz/melonet/ancord/KeystoreKey").ok()?;
-        env.new_global_ref(class).ok()
+        let class = env.new_global_ref(class).ok()?;
+        let bio = env.find_class("cz/melonet/ancord/BiometricKey").ok()?;
+        Some((class, env.new_global_ref(bio).ok()?))
     });
-    if let Some(class) = class {
-        let _ = BRIDGE.set(Bridge { vm, class });
+    if let Some((class, bio)) = classes {
+        let _ = BRIDGE.set(Bridge { vm, class, bio });
     }
     JNI_VERSION_1_6
 }
@@ -40,13 +44,17 @@ fn io(msg: &str) -> StoreError {
 }
 
 /// Zavolá `KeystoreKey.<method>(byte[]) -> byte[]?`.
-#[allow(unsafe_code, reason = "JClass z globální reference, viz JNI_OnLoad")]
 fn call(method: &str, input: &[u8]) -> Result<Vec<u8>, StoreError> {
+    call_on(false, method, input)
+}
+
+#[allow(unsafe_code, reason = "JClass z globální reference, viz JNI_OnLoad")]
+fn call_on(bio: bool, method: &str, input: &[u8]) -> Result<Vec<u8>, StoreError> {
     let bridge = BRIDGE.get().ok_or_else(|| io("Keystore není k dispozici"))?;
     let mut env = bridge.vm.attach_current_thread().map_err(|_| io("JNI"))?;
     let arg = env.byte_array_from_slice(input).map_err(|_| io("JNI"))?;
     // SAFETY: globální reference míří na `java.lang.Class` a žije po celou dobu procesu.
-    let class = unsafe { JClass::from_raw(bridge.class.as_obj().as_raw()) };
+    let class = unsafe { JClass::from_raw(if bio { bridge.bio.as_obj().as_raw() } else { bridge.class.as_obj().as_raw() }) };
     let out = env
         .call_static_method(&class, method, "([B)[B", &[JValue::Object(&arg)])
         .and_then(|v| v.l())
@@ -83,5 +91,41 @@ impl DeviceKey for AndroidKeystoreDeviceKey {
             }
             Err(e) => Err(StoreError::Io(e.to_string())),
         }
+    }
+}
+
+/// Biometrická obálka hlavního klíče (Kotlin `BiometricKey`): `wrap`/`unwrap` zobrazí systémový dotaz na otisk nebo obličej.
+pub struct AndroidBiometric;
+
+impl BiometricKey for AndroidBiometric {
+    fn available(&self) -> bool {
+        let Some(bridge) = BRIDGE.get() else { return false };
+        let Ok(mut env) = bridge.vm.attach_current_thread() else { return false };
+        // SAFETY: globální reference míří na `java.lang.Class` a žije po celou dobu procesu.
+        #[allow(unsafe_code, reason = "JClass z globální reference, viz JNI_OnLoad")]
+        let class = unsafe { JClass::from_raw(bridge.bio.as_obj().as_raw()) };
+        let ok = env.call_static_method(&class, "available", "()Z", &[]).and_then(|v| v.z()).unwrap_or(false);
+        let _ = env.exception_clear();
+        ok
+    }
+
+    fn wrap(&self, plain: &[u8]) -> Result<Vec<u8>, String> {
+        call_on(true, "wrap", plain).map_err(|_| "Biometrika byla zrušena nebo selhala".to_string())
+    }
+
+    fn unwrap(&self, blob: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
+        call_on(true, "unwrap", blob)
+            .map(Zeroizing::new)
+            .map_err(|_| "Biometrika byla zrušena nebo už neplatí (nový otisk?). Odemkněte heslem.".to_string())
+    }
+
+    fn forget(&self) {
+        let Some(bridge) = BRIDGE.get() else { return };
+        let Ok(mut env) = bridge.vm.attach_current_thread() else { return };
+        #[allow(unsafe_code, reason = "JClass z globální reference, viz JNI_OnLoad")]
+        // SAFETY: viz výše.
+        let class = unsafe { JClass::from_raw(bridge.bio.as_obj().as_raw()) };
+        let _ = env.call_static_method(&class, "forget", "()V", &[]);
+        let _ = env.exception_clear();
     }
 }

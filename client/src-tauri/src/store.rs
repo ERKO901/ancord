@@ -255,6 +255,19 @@ impl Store {
         self.passphrase
     }
 
+    /// Hlavní klíč úložiště pro obálku biometrikou (jen uvnitř shellu, do UI nikdy).
+    pub fn master_key(&self) -> Zeroizing<[u8; 32]> {
+        self.master.clone()
+    }
+
+    /// Otevře úložiště hlavním klíčem (biometrické odemčení). Špatný klíč se projeví až při čtení záznamů (`Corrupt`).
+    pub fn open_with_master(path: &Path, master: &[u8]) -> Result<Self, StoreError> {
+        let db = Database::open(path).map_err(io)?;
+        let blob = read_wrap(&db)?;
+        let master: [u8; 32] = master.try_into().map_err(|_| StoreError::Unlock)?;
+        Ok(Self { db, master: Zeroizing::new(master), passphrase: blob.get(1) == Some(&MODE_PASSPHRASE) })
+    }
+
     fn cipher(&self, table: Table) -> Result<XChaCha20Poly1305, StoreError> {
         let hk = Hkdf::<Sha256>::new(None, self.master.as_ref());
         let mut key = Zeroizing::new([0u8; 32]);

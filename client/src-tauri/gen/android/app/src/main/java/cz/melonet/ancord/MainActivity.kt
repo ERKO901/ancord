@@ -44,6 +44,10 @@ class MainActivity : TauriActivity() {
   }
 
   companion object {
+    /** Aktivita pro systémový dotaz na biometriku (`BiometricKey`). */
+    @Volatile
+    var current: java.lang.ref.WeakReference<MainActivity>? = null
+
     // Nejnižší hlavní verze Android System WebView (Chromium); UI se překládá na ES2022 (Chrome 94+), rezerva na CSS a výkon.
     const val MIN_WEBVIEW_MAJOR = 110
   }
@@ -53,6 +57,7 @@ class MainActivity : TauriActivity() {
     // Musí být před super.onCreate: okno se vytvoří s příznakem hned, bez jediného snímku bez ochrany.
     window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
     super.onCreate(savedInstanceState)
+    current = java.lang.ref.WeakReference(this)
     hardenWindow()
   }
 
