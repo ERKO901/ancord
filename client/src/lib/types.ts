@@ -22,6 +22,8 @@ export interface Contact {
   verified: boolean;
   /** Jméno, které si protistrana nastavila a poslala ve zprávě. Je to její tvrzení; ověřuje se bezpečnostním číslem. */
   peerName: string | null;
+  /** Příchozí žádost, kterou uživatel ještě nepřijal; odesílatel o nás zná jen klíč, dokud nepřijmeme. */
+  incoming: boolean;
 }
 
 export interface ConversationSummary {
@@ -79,6 +81,10 @@ export interface Commands {
   contact_mark_verified: [{ id: string }, void];
   /** Jméno jen pro sebe; prázdné vrátí jméno od protistrany. */
   contact_rename: [{ id: string; name: string }, Contact];
+  /** Přijme žádost: protistrana od nás dostane naše jméno. */
+  contact_accept: [{ id: string }, Contact];
+  /** Odmítne žádost: kontakt zmizí, protistrana se nic nedozví. */
+  contact_decline: [{ id: string }, void];
   /** Moje jméno, které se posílá ve zprávách (prázdné = žádné). */
   display_name_get: [void, string];
   display_name_set: [{ name: string }, string];
@@ -114,7 +120,7 @@ export interface Events {
 
 export const COMMAND_NAMES = [
   "identity_status", "identity_create", "address_get", "address_qr",
-  "contact_add", "contact_list", "contact_safety_number", "contact_mark_verified", "contact_rename",
+  "contact_add", "contact_list", "contact_safety_number", "contact_mark_verified", "contact_rename", "contact_accept", "contact_decline",
   "display_name_get", "display_name_set", "passphrase_change",
   "conversation_list", "conversation_open", "message_send", "typing_set", "conversation_delete",
   "connection_state", "settings_get", "settings_set", "lock", "unlock",

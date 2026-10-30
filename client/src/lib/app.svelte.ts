@@ -177,6 +177,17 @@ export async function markVerified(id: string): Promise<void> {
   await refreshContacts();
 }
 
+export async function acceptContact(id: string): Promise<void> {
+  await call("contact_accept", { id });
+  await Promise.all([refreshContacts(), refreshList()]);
+}
+
+export async function declineContact(id: string): Promise<void> {
+  await call("contact_decline", { id });
+  if (app.chatId === id) go("list");
+  await Promise.all([refreshContacts(), refreshList()]);
+}
+
 export async function renameContact(id: string, name: string): Promise<void> {
   await call("contact_rename", { id, name });
   await Promise.all([refreshContacts(), refreshList()]);

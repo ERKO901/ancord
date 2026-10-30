@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clearMocks } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { installMockBackend } from "../src/lib/mock/backend";
-import { app, boot, createIdentity, disposeListeners, go, loadOlder, lockNow, openChat, send, addContact, renameContact, changePassphrase } from "../src/lib/app.svelte";
+import { app, boot, createIdentity, disposeListeners, go, loadOlder, lockNow, openChat, send, addContact, renameContact, changePassphrase, acceptContact, declineContact } from "../src/lib/app.svelte";
 
 async function fresh(opts: Parameters<typeof installMockBackend>[0] = {}) {
   disposeListeners();
@@ -105,6 +105,28 @@ describe("stav aplikace nad IPC", () => {
     await expect(addContact(addr)).rejects.toBe("Kontakt už existuje");
     go("contacts");
     expect(app.view).toBe("contacts");
+  });
+});
+
+describe("žádosti o kontakt", () => {
+  it("příchozí žádost nese jméno odesílatele; přijetí ji zařadí mezi kontakty, odmítnutí ji smaže", async () => {
+    await fresh({ request: true });
+    await boot();
+    const req = app.contacts.find((c) => c.incoming);
+    expect(req).toMatchObject({ name: "Dana", peerName: "Dana" });
+    await acceptContact(req?.id ?? "");
+    expect(app.contacts.find((c) => c.name === "Dana")?.incoming).toBe(false);
+
+    await fresh({ request: true });
+    await boot();
+    await declineContact(app.contacts.find((c) => c.incoming)?.id ?? "");
+    expect(app.contacts.some((c) => c.name === "Dana")).toBe(false);
+  });
+
+  it("odmítnout jde jen žádost", async () => {
+    await fresh();
+    await boot();
+    await expect(declineContact(app.contacts[0]?.id ?? "")).rejects.toBe("Kontakt není žádost");
   });
 });
 

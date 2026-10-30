@@ -48,6 +48,16 @@ fn contact_add(core: State<Core>, address: String, name: Option<String>) -> Resu
 }
 
 #[tauri::command]
+fn contact_accept(core: State<Core>, id: String) -> Result<Contact, String> {
+    core.contact_accept(&id)
+}
+
+#[tauri::command]
+fn contact_decline(core: State<Core>, id: String) -> Result<(), String> {
+    core.contact_decline(&id)
+}
+
+#[tauri::command]
 fn contact_rename(core: State<Core>, id: String, name: String) -> Result<Contact, String> {
     core.contact_rename(&id, &name)
 }
@@ -225,7 +235,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             identity_status, identity_create, address_get, address_qr,
-            contact_add, contact_list, contact_safety_number, contact_mark_verified, contact_rename,
+            contact_add, contact_list, contact_safety_number, contact_mark_verified, contact_rename, contact_accept, contact_decline,
             display_name_get, display_name_set, passphrase_change,
             conversation_list, conversation_open, message_send, typing_set, conversation_delete,
             connection_state, settings_get, settings_set, lock, unlock,

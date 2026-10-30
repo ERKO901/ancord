@@ -352,7 +352,6 @@ impl Store {
         self.open_record(table, key, v.value()).map(Some)
     }
 
-    #[cfg(test)]
     pub fn delete(&self, table: Table, key: &[u8]) -> Result<bool, StoreError> {
         let tx = self.db.begin_write().map_err(io)?;
         let removed = {

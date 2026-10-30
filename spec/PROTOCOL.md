@@ -575,5 +575,6 @@ Plaintext zprávy (§13.2) je buď holý text UTF-8, nebo **rámec verze 1**: `0
 
 - Jméno je součástí šifrovaného plaintextu: anchor ani node ho nevidí a nešíří se v profilu (§15.2). Nese ho každá zpráva, takže změna jména se k protistraně dostane s další zprávou.
 - Příjemce jméno **vyčistí**: bez řídicích a směrových znaků (U+202A–202E, U+2066–2069, U+200B–200F, U+FEFF), oříznuté, nejvýše 32 znaků. Neplatné jméno zahodí, zprávu ne.
+- **Úvodní rámec.** Rámec s `n > 0` a prázdným textem nese jen jméno a příjemce ho nezobrazí jako zprávu. Klient ho pošle (jen je-li jméno nastavené) hned po založení konverzace, aby žádost o kontakt dorazila s jménem, a znovu při přijetí žádosti, aby se druhá strana dozvěděla jméno přijímajícího. Do přijetí klient příchozí žádosti nic neposílá, takže odesílatel vidí jen klíč. První odeslaná zpráva úvodní rámec nahrazuje (nese jméno sama).
 - Obálka (§15.4) jméno nenese. Příjemce zná jméno iniciátora z jeho první zprávy, iniciátor jméno příjemce až z jeho první odpovědi. Do té doby klient ukazuje začátek adresy.
 - Jméno je **tvrzení odesílatele**, ne ověřený fakt: kdokoli si může nastavit stejné jméno jako někdo jiný. Klient proto ukazuje jméno dohromady se stavem ověření (bezpečnostní číslo, §15.4) a dovoluje kontaktu dát vlastní jméno, které má přednost.

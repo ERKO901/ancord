@@ -65,3 +65,8 @@ ANCORD_NODE_URL='ws://127.0.0.1:8790/{hostname}/client' npm run tauri dev
 ## Pravidla (§13.5)
 
 Zprávy jsou čistý text (žádné HTML, Markdown, náhledy). UI nemá síť: CSP `connect-src ipc:`, žádný `fetch`. Klíče, tickety a adresy nodů UI nikdy nedostane.
+
+
+## Žádosti o kontakt
+
+Nový kontakt se přidává jen podle adresy: odešle se žádost s mým jménem (úvodní rámec, `spec/PROTOCOL.md` §15.14). Příjemce ji vidí v Kontaktech v sekci Žádosti už se jménem a může ji přijmout (`contact_accept`, odesílatel pak dostane jeho jméno) nebo odmítnout (`contact_decline`, kontakt i zprávy se smažou). Odpověď na žádost ji také přijímá. Odesílatel do přijetí vidí jen začátek klíče.

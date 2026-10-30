@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, go } from "../lib/app.svelte";
+  import { app, go, acceptContact, declineContact, errText } from "../lib/app.svelte";
   import { byName, fold, shortAddress } from "../lib/format";
   import Avatar from "../lib/ui/Avatar.svelte";
   import Header from "../lib/ui/Header.svelte";
@@ -8,9 +8,20 @@
   let query = $state("");
 
   // Abecední sekce; písmeno bez diakritiky, ostatní do „#“.
+  const requests = $derived(app.contacts.filter((c) => c.incoming));
+
+  async function act(fn: () => Promise<void>) {
+    app.error = null;
+    try {
+      await fn();
+    } catch (e) {
+      app.error = errText(e);
+    }
+  }
+
   const groups = $derived.by(() => {
     const q = fold(query.trim());
-    const xs = app.contacts.filter((c) => !q || fold(c.name).includes(q) || fold(c.address).includes(q)).sort(byName);
+    const xs = app.contacts.filter((c) => !c.incoming).filter((c) => !q || fold(c.name).includes(q) || fold(c.address).includes(q)).sort(byName);
     const out: { letter: string; items: typeof xs }[] = [];
     for (const c of xs) {
       const first = fold(c.name).charAt(0).toUpperCase();
@@ -40,6 +51,26 @@
       <input type="search" placeholder="Hledat kontakty" aria-label="Hledat kontakty" bind:value={query} autocomplete="off" spellcheck="false" />
     </label>
     <div class="scroll">
+      {#if requests.length > 0}
+        <h2 class="group-title">Žádosti</h2>
+        <ul class="list-card">
+          {#each requests as c (c.id)}
+            <li class="req">
+              <button class="setting" onclick={() => go("contact", c.id)}>
+                <Avatar name={c.name} size={42} />
+                <span class="t">
+                  <strong>{c.name}</strong>
+                  <span class="mono">{shortAddress(c.address)}</span>
+                </span>
+              </button>
+              <span class="acts">
+                <button class="btn primary" onclick={() => act(() => acceptContact(c.id))}>Přijmout</button>
+                <button class="btn" onclick={() => act(() => declineContact(c.id))}>Odmítnout</button>
+              </span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
       {#each groups as g (g.letter)}
         <h2 class="group-title">{g.letter}</h2>
         <ul class="list-card">
@@ -69,6 +100,7 @@
   .scroll { overflow-y: auto; padding: 0 var(--space-4) var(--space-5); min-height: 0; flex: 1; }
   .scroll .group-title { margin-top: var(--space-3); }
   ul { list-style: none; margin: 0; padding: 0; }
+  .req .acts { display: flex; gap: var(--space-2); padding: 0 var(--space-4) var(--space-3); }
   .ok { color: var(--ok); display: grid; }
   .unver { font-size: var(--fs-sm); color: var(--warn); flex: none; }
   .none { text-align: center; padding: var(--space-5); margin: 0; }

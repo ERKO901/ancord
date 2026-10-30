@@ -44,16 +44,19 @@ struct StoredContact {
     label: String,
     unread: u32,
     outbox: Vec<OutItem>,
+    /// Ještě se má odeslat úvodní rámec s mým jménem (bez textu), který protistrana uvidí v žádosti.
+    intro: bool,
 }
 
 impl StoredContact {
     fn new(pk: [u8; 32], label: String, peer_name: Option<String>, verified: bool, unread: u32, outbox: Vec<OutItem>) -> Self {
         let mut c = Self {
             pk,
-            contact: Contact { id: conv_id(&pk), name: String::new(), address: address_uri(&pk), verified, peer_name },
+            contact: Contact { id: conv_id(&pk), name: String::new(), address: address_uri(&pk), verified, peer_name, incoming: false },
             label,
             unread,
             outbox,
+            intro: false,
         };
         c.refresh_name();
         c
@@ -88,6 +91,10 @@ struct ContactRec {
     unread: u32,
     #[serde(default)]
     outbox: Vec<OutItem>,
+    #[serde(default)]
+    incoming: bool,
+    #[serde(default)]
+    intro: bool,
 }
 
 const IDENTITY_KEY: &[u8] = b"keys";
@@ -226,6 +233,23 @@ impl Shared {
         out
     }
 
+    /// Kontakty, kterým se má poslat úvodní rámec se jménem: `(konverzace, plaintext)`. Dokud není jméno nastavené, čeká se.
+    pub(crate) fn intros(&self) -> Vec<(String, zeroize::Zeroizing<Vec<u8>>)> {
+        let Ok(g) = self.lock() else { return Vec::new() };
+        let Some(name) = Some(g.display_name.as_str()).filter(|n| !n.is_empty()) else { return Vec::new() };
+        g.contacts.iter().filter(|c| c.intro && !c.contact.incoming).map(|c| (c.contact.id.clone(), zeroize::Zeroizing::new(pack(Some(name), "")))).collect()
+    }
+
+    /// Úvodní rámec odešel.
+    pub(crate) fn intro_done(&self, conv: &str) -> Result<(), CliError> {
+        let (mut g, store) = self.store()?;
+        if let Some(c) = g.contacts.iter_mut().find(|c| c.contact.id == conv) {
+            c.intro = false;
+            save_contact_rec(&store, c).map_err(CliError::Session)?;
+        }
+        Ok(())
+    }
+
     /// Zpráva odešla s `id` v síti: stav `pending`.
     pub(crate) fn mark_sent(&self, conv: &str, key: &str, net_id: &[u8; 16]) -> Result<Option<UiEvent>, CliError> {
         let (mut g, store) = self.store()?;
@@ -284,7 +308,7 @@ fn put_message(store: &Store, key: &str, msg: &Message) -> Result<(), String> {
 }
 
 fn save_contact_rec(store: &Store, c: &StoredContact) -> Result<(), String> {
-    let rec = ContactRec { name: c.label.clone(), peer_name: c.contact.peer_name.clone(), verified: c.contact.verified, unread: c.unread, outbox: c.outbox.clone() };
+    let rec = ContactRec { name: c.label.clone(), peer_name: c.contact.peer_name.clone(), verified: c.contact.verified, unread: c.unread, outbox: c.outbox.clone(), incoming: c.contact.incoming, intro: c.intro };
     let json = serde_json::to_vec(&rec).map_err(|e| e.to_string())?;
     store.put(Table::Contacts, &c.pk, &json).map_err(|e| e.to_string())
 }
@@ -318,7 +342,8 @@ impl StorePersist {
         // jméno, které protistrana uvedla v nejnovější přijaté zprávě (spec §15.14)
         let peer_name = session.history.iter().rev().filter(|h| !h.outgoing).find_map(|h| h.name.clone());
         if new_contact && !g.contacts.iter().any(|c| c.pk == pk) {
-            let c = StoredContact::new(pk, String::new(), peer_name.clone(), false, 0, Vec::new());
+            let mut c = StoredContact::new(pk, String::new(), peer_name.clone(), false, 0, Vec::new());
+            c.contact.incoming = true;
             save_contact_rec(&store, &c).map_err(err)?;
             self.events.push(UiEvent::ContactRequest { contact: c.contact.clone() });
             g.contacts.push(c);
@@ -330,9 +355,17 @@ impl StorePersist {
                 self.events.push(UiEvent::ContactUpdate { contact: c.contact.clone() });
             }
         }
+        // odmítnutý kontakt: další zprávy se zahodí
+        if !g.contacts.iter().any(|c| c.pk == pk) {
+            return Ok(());
+        }
         let mut fresh = 0;
         for h in session.history.iter().filter(|h| !h.outgoing) {
             if !self.written.insert(h.id.clone()) {
+                continue;
+            }
+            // úvodní rámec se jménem bez textu (žádost, přijetí): jméno už je zpracované, zpráva to není
+            if h.text.is_empty() {
                 continue;
             }
             let msg = Message { id: h.id.clone(), ts: now_ms(), mine: false, text: h.text.clone(), state: DeliveryState::Delivered };
@@ -483,7 +516,10 @@ impl Core {
             let rec: ContactRec = serde_json::from_slice(&v).map_err(|_| StoreError::Corrupt.to_string())?;
             let legacy = rec.name.strip_prefix("Kontakt ").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
             let label = if legacy { String::new() } else { rec.name };
-            contacts.push(StoredContact::new(pk, label, rec.peer_name, rec.verified, rec.unread, rec.outbox));
+            let mut c = StoredContact::new(pk, label, rec.peer_name, rec.verified, rec.unread, rec.outbox);
+            c.contact.incoming = rec.incoming;
+            c.intro = rec.intro;
+            contacts.push(c);
         }
         s.settings = match store.get(Table::Settings, SETTINGS_KEY).map_err(|e| e.to_string())? {
             Some(v) => serde_json::from_slice(&v).map_err(|_| StoreError::Corrupt.to_string())?,
@@ -581,7 +617,9 @@ impl Core {
                 return Err("Kontakt už existuje".into());
             }
             let label = name.and_then(|n| clean_name(&n)).unwrap_or_default();
-            let c = StoredContact::new(pk, label, None, false, 0, Vec::new());
+            let mut c = StoredContact::new(pk, label, None, false, 0, Vec::new());
+            // žádost nese jen mé jméno; protistrana ho uvidí hned, já jeho až po přijetí
+            c.intro = true;
             if let Some(store) = &s.store {
                 save_contact_rec(store, &c)?;
             }
@@ -604,6 +642,41 @@ impl Core {
                 save_contact_rec(store, c)?;
             }
             Ok(c.contact.clone())
+        })
+    }
+
+    /// Přijme příchozí žádost: protistrana od nás dostane jméno (úvodní rámec).
+    pub fn contact_accept(&self, id: &str) -> Result<Contact, String> {
+        let contact = self.with(|s| {
+            ready_keys(s)?;
+            let c = s.contacts.iter_mut().find(|c| c.contact.id == id).ok_or_else(|| "Neznámý kontakt".to_string())?;
+            if c.contact.incoming {
+                c.contact.incoming = false;
+                c.intro = true;
+                if let Some(store) = &s.store {
+                    save_contact_rec(store, c)?;
+                }
+            }
+            Ok(c.contact.clone())
+        })?;
+        self.notify(Cmd::Flush);
+        Ok(contact)
+    }
+
+    /// Odmítne příchozí žádost: kontakt i zprávy zmizí a další zprávy od něj se zahazují. Protistrana se nic nedozví.
+    pub fn contact_decline(&self, id: &str) -> Result<(), String> {
+        self.with(|s| {
+            ready_keys(s)?;
+            let i = s.contacts.iter().position(|c| c.contact.id == id).ok_or_else(|| "Neznámý kontakt".to_string())?;
+            if !s.contacts[i].contact.incoming {
+                return Err("Kontakt není žádost".into());
+            }
+            if let Some(store) = &s.store {
+                store.delete_prefix(Table::Messages, format!("{id}/").as_bytes()).map_err(|e| e.to_string())?;
+                store.delete(Table::Contacts, &s.contacts[i].pk).map_err(|e| e.to_string())?;
+            }
+            s.contacts.remove(i);
+            Ok(())
         })
     }
 
@@ -716,6 +789,9 @@ impl Core {
             ready_keys(s)?;
             let store = s.store.clone().ok_or_else(|| "Zprávy vyžadují trvalý profil".to_string())?;
             let c = s.contacts.iter_mut().find(|c| c.contact.id == id).ok_or_else(|| "Neznámá konverzace".to_string())?;
+            // odpověď na žádost ji přijímá; jméno jde s touto zprávou
+            c.contact.incoming = false;
+            c.intro = false;
             let mut raw = [0u8; 16];
             rand::rngs::OsRng.fill_bytes(&mut raw);
             let msg = Message { id: b64u_encode(&raw), ts: now_ms(), mine: true, text: text.to_owned(), state: DeliveryState::Queued };
@@ -949,6 +1025,46 @@ mod tests {
         let b = Core::persistent(dir.path().to_path_buf(), FAST, false).unwrap();
         assert_eq!(b.display_name_get().unwrap(), "Alice");
         assert_eq!(b.display_name_set("").unwrap(), "");
+    }
+
+    #[test]
+    fn add_sends_a_name_only_intro_and_an_incoming_request_is_accepted_or_declined() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = Core::persistent(dir.path().to_path_buf(), FAST, false).unwrap();
+        a.identity_create(None).unwrap();
+        let c = a.contact_add(&ready().address_get().unwrap(), None).unwrap();
+        // bez nastaveného jména se nic neposílá; po nastavení odejde rámec se jménem a bez textu
+        assert!(a.shared.intros().is_empty());
+        a.display_name_set("Alice").unwrap();
+        let intros = a.shared.intros();
+        let content = ancord_core::message::unpack(&intros[0].1);
+        assert_eq!((intros[0].0.as_str(), content.name.as_deref(), content.text.as_str()), (c.id.as_str(), Some("Alice"), ""));
+        a.shared.intro_done(&c.id).unwrap();
+        assert!(a.shared.intros().is_empty());
+
+        // příchozí žádost: nic se neposílá, dokud ji uživatel nepřijme; přijetí pošle jméno
+        a.with(|s| {
+            s.contacts[0].contact.incoming = true;
+            s.contacts[0].intro = false;
+            Ok(())
+        })
+        .unwrap();
+        assert!(a.contact_list().unwrap()[0].incoming);
+        let accepted = a.contact_accept(&c.id).unwrap();
+        assert!(!accepted.incoming);
+        assert_eq!(a.shared.intros().len(), 1);
+        // odmítnout lze jen žádost
+        assert!(a.contact_decline(&c.id).is_err());
+        a.with(|s| {
+            s.contacts[0].contact.incoming = true;
+            Ok(())
+        })
+        .unwrap();
+        a.contact_decline(&c.id).unwrap();
+        assert!(a.contact_list().unwrap().is_empty());
+        drop(a);
+        let b = Core::persistent(dir.path().to_path_buf(), FAST, false).unwrap();
+        assert!(b.contact_list().unwrap().is_empty());
     }
 
     #[test]

@@ -133,12 +133,12 @@ describe("obrazovky (D4: každá se vykreslí a reaguje)", () => {
     addr.value = "blbost";
     addr.dispatchEvent(new Event("input", { bubbles: true }));
     await settle();
-    await click("Přidat");
+    await click("Poslat žádost");
     expect(document.querySelector("[role=alert]")?.textContent).toContain("Neplatná adresa");
     addr.value = `ancord:${"B".repeat(43)}`;
     addr.dispatchEvent(new Event("input", { bubbles: true }));
     await settle();
-    await click("Přidat");
+    await click("Poslat žádost");
     expect(text()).toContain("Bezpečnostní číslo");
   });
 

@@ -4,7 +4,6 @@
   import Icon from "../lib/ui/Icon.svelte";
 
   let address = $state("");
-  let name = $state("");
   let busy = $state(false);
 
   // Android: nativní skener QR (`MainActivity.ScanBridge`); jinde tlačítko není. Výsledek jen vyplní pole, přidání potvrdí uživatel.
@@ -29,7 +28,7 @@
     busy = true;
     app.error = null;
     try {
-      const c = await addContact(address.trim(), name.trim() || undefined);
+      const c = await addContact(address.trim());
       go("contact", c.id);
     } catch (e) {
       app.error = errText(e);
@@ -57,12 +56,8 @@
         <button type="button" class="icon-btn pasteb" aria-label="Vložit ze schránky" onclick={paste}><Icon name="paste" /></button>
       </span>
     </label>
-    <label>
-      <span class="lbl">Jméno <span class="muted">(vidíte jen vy)</span></span>
-      <input class="field" placeholder="Například Alice" bind:value={name} autocomplete="off" autocorrect="off" />
-    </label>
-    <div class="hint card"><Icon name="shield" size={20} /><p class="muted">Adresu dostanete od kontaktu textem nebo QR kódem. Po přidání si ověřte bezpečnostní číslo mimo síť, jinak vám může někdo podstrčit cizí klíč.</p></div>
-    <button class="btn primary" disabled={busy || !address.trim()}>Přidat</button>
+    <div class="hint card"><Icon name="shield" size={20} /><p class="muted">Adresu dostanete od kontaktu textem nebo QR kódem. Odešle se žádost s vaším jménem; kontakt u vás uvidí jen klíč, dokud žádost nepřijme. Pak si ověřte bezpečnostní číslo mimo síť, jinak vám může někdo podstrčit cizí klíč.</p></div>
+    <button class="btn primary" disabled={busy || !address.trim()}>Poslat žádost</button>
   </form>
 </section>
 

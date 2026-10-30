@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, go, loadOlder, contactName } from "../lib/app.svelte";
+  import { app, go, loadOlder, contactName, acceptContact, declineContact } from "../lib/app.svelte";
   import { connText, dayLabel, sameDay, timeFull, timeShort, stateLabel } from "../lib/format";
   import type { Message } from "../lib/types";
   import Avatar from "../lib/ui/Avatar.svelte";
@@ -37,6 +37,16 @@
     {/snippet}
   </Header>
 
+  {#if contact?.incoming}
+    <div class="request card">
+      <p>{name} vám poslal(a) žádost o kontakt. Dokud ji nepřijmete, neuvidí vaše jméno.</p>
+      <span class="acts">
+        <button class="btn primary" onclick={() => app.chatId && void acceptContact(app.chatId)}>Přijmout</button>
+        <button class="btn" onclick={() => app.chatId && void declineContact(app.chatId)}>Odmítnout</button>
+      </span>
+    </div>
+  {/if}
+
   <div class="list">
     {#if app.messages.length === 0}
       <div class="empty">
@@ -73,6 +83,9 @@
 </section>
 
 <style>
+  .request { margin: var(--space-2) var(--space-4); padding: var(--space-3) var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
+  .request p { margin: 0; }
+  .request .acts { display: flex; gap: var(--space-2); }
   .chat { display: flex; flex-direction: column; height: 100%; min-height: 0; }
   .list { flex: 1; min-height: 0; }
   .empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-3); padding: var(--space-5); text-align: center; }

@@ -13,6 +13,8 @@ export interface MockOptions {
   biometric?: boolean;
   /** Prodleva simulované odpovědi protistrany v ms, 0 = bez odpovědi. */
   replyMs?: number;
+  /** Přidá příchozí žádost o kontakt „Dana“ (zatím nepřijatou). */
+  request?: boolean;
 }
 
 const b64u = (n: number) => Array.from({ length: n }, (_, i) => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"[(i * 7 + n) % 64]).join("");
@@ -59,11 +61,12 @@ export function createMockBackend(opts: MockOptions = {}) {
   /** Kontakty bez jména od uživatele: ukazují jméno protistrany, jakmile ho pošle. */
   const labelless = new Set<string>();
   const contacts: Contact[] = [];
+  let cseq = 0;
   const messages = new Map<string, Message[]>();
   const unread = new Map<string, number>();
 
   const addContact = (name: string, address = `ancord:${b64u(43).split("").reverse().join("")}${contacts.length}`): Contact => {
-    const c: Contact = { id: `c${contacts.length + 1}`, name, address, verified: false, peerName: null };
+    const c: Contact = { id: `c${++cseq}`, name, address, verified: false, peerName: null, incoming: false };
     contacts.push(c);
     messages.set(c.id, []);
     return c;
@@ -92,6 +95,11 @@ export function createMockBackend(opts: MockOptions = {}) {
       });
     }
     messages.set(ops.id, big);
+    if (opts.request) {
+      const dana = addContact("Dana");
+      dana.peerName = "Dana";
+      dana.incoming = true;
+    }
   }
 
   const summaries = (): ConversationSummary[] =>
@@ -135,6 +143,18 @@ export function createMockBackend(opts: MockOptions = {}) {
         c.name = c.peerName ?? `${c.address.replace(/^ancord:/, "").slice(0, 8)}…`;
       }
       return { ...c };
+    },
+    contact_accept: ({ id: cid }) => {
+      const c = contacts.find((x) => x.id === cid);
+      if (!c) throw "Neznámý kontakt";
+      c.incoming = false;
+      return { ...c };
+    },
+    contact_decline: ({ id: cid }) => {
+      const i = contacts.findIndex((x) => x.id === cid);
+      if (!contacts[i]?.incoming) throw "Kontakt není žádost";
+      contacts.splice(i, 1);
+      messages.delete(cid);
     },
     display_name_get: () => myName,
     display_name_set: ({ name }) => {

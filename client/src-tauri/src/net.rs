@@ -300,6 +300,15 @@ impl Task {
                 Err(e) => self.soft(e)?,
             }
         }
+        for (conv, text) in self.shared.intros() {
+            let Some(index) = online.conversations.iter().position(|s| session_conv(s).as_deref() == Some(conv.as_str())) else { continue };
+            let sent = online.send(ws, &mut self.persist, index, &text).await;
+            self.settle(online, Vec::new());
+            match sent {
+                Ok(_) => self.shared.intro_done(&conv)?,
+                Err(e) => self.soft(e)?,
+            }
+        }
         for (conv, key, text) in self.shared.queued() {
             let Some(index) = online.conversations.iter().position(|s| session_conv(s).as_deref() == Some(conv.as_str())) else { continue };
             let sent = online.send(ws, &mut self.persist, index, &text).await;

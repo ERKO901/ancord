@@ -3,7 +3,7 @@ use tauri_build::{AppManifest, Attributes};
 /// Příkazy UI → Rust (§13.5). Musí odpovídat `COMMAND_NAMES` v `src/lib/types.ts`; hlídá to `client/test/contract.test.ts`.
 const COMMANDS: &[&str] = &[
     "identity_status", "identity_create", "address_get", "address_qr",
-    "contact_add", "contact_list", "contact_safety_number", "contact_mark_verified", "contact_rename",
+    "contact_add", "contact_list", "contact_safety_number", "contact_mark_verified", "contact_rename", "contact_accept", "contact_decline",
     "display_name_get", "display_name_set", "passphrase_change",
     "conversation_list", "conversation_open", "message_send", "typing_set", "conversation_delete",
     "connection_state", "settings_get", "settings_set", "lock", "unlock",

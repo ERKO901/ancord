@@ -53,6 +53,8 @@ pub struct Contact {
     pub verified: bool,
     /// Jméno, které si protistrana nastavila a poslala ve zprávě (její tvrzení, neověřené).
     pub peer_name: Option<String>,
+    /// Příchozí žádost o kontakt, kterou uživatel ještě nepřijal (protistrana vidí jen náš klíč, dokud nepřijmeme).
+    pub incoming: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
