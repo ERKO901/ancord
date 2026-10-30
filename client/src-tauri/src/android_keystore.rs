@@ -50,7 +50,11 @@ fn call(method: &str, input: &[u8]) -> Result<Vec<u8>, StoreError> {
     let out = env
         .call_static_method(&class, method, "([B)[B", &[JValue::Object(&arg)])
         .and_then(|v| v.l())
-        .map_err(|_| io("Keystore selhal"))?;
+        .map_err(|_| {
+            // Nevyřízená Java výjimka by se vrátila do Javy z nejbližšího JNI volání (např. `Ipc.postMessage`).
+            let _ = env.exception_clear();
+            io("Keystore selhal")
+        })?;
     if out.is_null() {
         return Err(io("Keystore odmítl operaci"));
     }

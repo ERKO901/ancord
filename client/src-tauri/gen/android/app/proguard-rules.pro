@@ -19,3 +19,12 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+# Release (R8) maže, co nevidí volané z Kotlinu/Javy. Tyto metody volá Rust přes JNI, resp. JavaScript z WebView.
+-keep class cz.melonet.ancord.KeystoreKey {
+  public static byte[] wrap(byte[]);
+  public static byte[] unwrap(byte[]);
+}
+-keepclassmembers class cz.melonet.ancord.MainActivity$ScanBridge {
+  @android.webkit.JavascriptInterface public <methods>;
+}
+-keep class cz.melonet.ancord.SyncReceiver { *; }
