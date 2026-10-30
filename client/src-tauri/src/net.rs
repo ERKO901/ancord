@@ -119,9 +119,17 @@ async fn run(shared: Shared, config: Arc<NetConfig>, sink: Arc<dyn Sink>, mut rx
             Ok(route) => connect_any(&route, &ek, &config.worker_key, |h| config.url_for(h)).await.map(|(_, ws)| ws),
             Err(e) => Err(e),
         };
+        #[cfg(debug_assertions)]
+        if let Err(e) = &connected {
+            eprintln!("ancord net: connect failed: {e}");
+        }
         if let Ok(mut ws) = connected {
             let result = task.serve(&mut online, &mut ws, &mut rx).await;
             ws.close().await;
+            #[cfg(debug_assertions)]
+            if let Err(e) = &result {
+                eprintln!("ancord net: connection ended: {e}");
+            }
             if result.is_ok() {
                 // kanál pokynů zanikl: `Core` síť vypnul
                 set_state(&shared, &*sink, ConnectionState::Offline);

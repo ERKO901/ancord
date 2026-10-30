@@ -1,8 +1,8 @@
 {
   "ARCHITECTURE.md": {
-    "mtime": 1793349785.3174906,
-    "seen": 1793349790.1275861,
-    "ast_hash": "83fc770815c4a3e23e5c270d824fff4d",
+    "mtime": 1793350363.6369538,
+    "seen": 1793350365.3694336,
+    "ast_hash": "8a4594670e9bcfa0bf402c3847e4f8ac",
     "semantic_hash": ""
   },
   "CLAUDE.md": {
@@ -1032,9 +1032,9 @@
     "semantic_hash": ""
   },
   "client/README.md": {
-    "mtime": 1793349785.3176556,
-    "seen": 1793349790.1275873,
-    "ast_hash": "c4cce01f4d69e30664f8ff6de33ae504",
+    "mtime": 1793350363.636496,
+    "seen": 1793350365.3694348,
+    "ast_hash": "a00150f8fa0d27649e2028d6d28da160",
     "semantic_hash": ""
   },
   "client/index.html": {
@@ -1248,9 +1248,9 @@
     "semantic_hash": ""
   },
   "client/src-tauri/gen/android/app/src/main/java/cz/melonet/ancord/MainActivity.kt": {
-    "mtime": 1793348945.0983138,
-    "seen": 1793349790.1274931,
-    "ast_hash": "8cb586a4d24a9cd31fdbed45ccf15187",
+    "mtime": 1793350341.2616858,
+    "seen": 1793350365.3693447,
+    "ast_hash": "914ef48b52b93f568ca73850e3f9d0da",
     "semantic_hash": ""
   },
   "client/src-tauri/gen/android/app/src/main/java/cz/melonet/ancord/SyncReceiver.kt": {
