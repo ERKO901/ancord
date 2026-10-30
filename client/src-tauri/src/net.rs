@@ -15,7 +15,7 @@ use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use tokio::sync::mpsc;
 
-use crate::contract::{ConnectionState, DeliveryState, UiEvent};
+use crate::contract::{ConnectionIssue, ConnectionState, DeliveryState, UiEvent};
 use crate::core::{session_conv, Shared, StorePersist};
 
 /// Ping při nečinnosti (idle timeout tunelu je 125 s, §9).
@@ -119,16 +119,18 @@ async fn run(shared: Shared, config: Arc<NetConfig>, sink: Arc<dyn Sink>, mut rx
             Ok(route) => connect_any(&route, &ek, &config.worker_key, |h| config.url_for(h)).await.map(|(_, ws)| ws),
             Err(e) => Err(e),
         };
-        #[cfg(debug_assertions)]
         if let Err(e) = &connected {
+            #[cfg(debug_assertions)]
             eprintln!("ancord net: connect failed: {e}");
+            sink.emit(UiEvent::ConnectionIssue { issue: Some(classify(e)) });
         }
         if let Ok(mut ws) = connected {
             let result = task.serve(&mut online, &mut ws, &mut rx).await;
             ws.close().await;
-            #[cfg(debug_assertions)]
             if let Err(e) = &result {
+                #[cfg(debug_assertions)]
                 eprintln!("ancord net: connection ended: {e}");
+                sink.emit(UiEvent::ConnectionIssue { issue: Some(classify(e)) });
             }
             if result.is_ok() {
                 // kanál pokynů zanikl: `Core` síť vypnul
@@ -188,11 +190,15 @@ pub(crate) async fn sync_once(shared: Shared, config: &NetConfig, sink: Arc<dyn 
     Ok(received)
 }
 
-/// Chyba spojení ukončí spojení (a přijde nové), ostatní (node odmítl, profil nenalezen) jen přeskočí jednu akci.
-fn soft(e: CliError) -> Result<(), CliError> {
+/// Hrubý důvod selhání pro UI (spojení se rozlišuje podle varianty chyby a textu admission).
+fn classify(e: &CliError) -> ConnectionIssue {
     match e {
-        CliError::Connection(_) => Err(e),
-        _ => Ok(()),
+        CliError::Route(m) if m.starts_with(|c: char| c.is_ascii_digit()) || m.starts_with("unexpected response") => ConnectionIssue::WorkerError,
+        CliError::Route(_) => ConnectionIssue::WorkerUnreachable,
+        CliError::Admission { reason, .. } if reason.contains("untrusted route") => ConnectionIssue::RouteUntrusted,
+        CliError::AllFailed(m) if m.contains("untrusted route") => ConnectionIssue::RouteUntrusted,
+        CliError::Node { .. } => ConnectionIssue::NodeRejected,
+        _ => ConnectionIssue::NodeUnreachable,
     }
 }
 
@@ -203,9 +209,25 @@ struct Task {
 }
 
 impl Task {
+    /// Chyba spojení ukončí spojení (a přijde nové), ostatní (node odmítl, profil nenalezen) jen přeskočí jednu akci.
+    /// Odmítnutí `bad_request` se hlásí uživateli: nasazený node nejspíš nezná zprávu této verze klienta.
+    fn soft(&self, e: CliError) -> Result<(), CliError> {
+        match e {
+            CliError::Connection(_) => Err(e),
+            CliError::Node { ref code, .. } => {
+                if code == "bad_request" {
+                    self.sink.emit(UiEvent::ConnectionIssue { issue: Some(ConnectionIssue::NodeRejected) });
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Jedno spojení. `Ok` = kanál pokynů zanikl, `Err` = spojení spadlo.
     async fn serve(&mut self, online: &mut Online, ws: &mut NodeSocket, rx: &mut mpsc::UnboundedReceiver<Cmd>) -> Result<(), CliError> {
         let (events, _skipped) = online.attach(ws, &mut self.persist).await?;
+        self.sink.emit(UiEvent::ConnectionIssue { issue: None });
         // online = profil zveřejněný a odběry přihlášené: protistrana nás teď najde a zprávy chodí živě
         set_state(&self.shared, &*self.sink, ConnectionState::Online);
         self.settle(online, events);
@@ -228,7 +250,7 @@ impl Task {
                     Some(Cmd::Flush) => self.flush(online, ws).await?,
                     Some(Cmd::Typing { id, on }) => {
                         if let Some(s) = online.conversations.iter().find(|s| session_conv(s).as_deref() == Some(id.as_str())) {
-                            send_typing(ws, s, on).await.or_else(soft)?;
+                            send_typing(ws, s, on).await.or_else(|e| self.soft(e))?;
                         }
                     }
                 },
@@ -273,7 +295,7 @@ impl Task {
             match online.start(ws, &mut self.persist, &pk).await {
                 Ok(event) => self.settle(online, vec![event]),
                 // protistrana ještě nezveřejnila profil: zkusí se při dalším připojení nebo odeslání
-                Err(e) => soft(e)?,
+                Err(e) => self.soft(e)?,
             }
         }
         for (conv, key, text) in self.shared.queued() {
@@ -286,7 +308,7 @@ impl Task {
                         self.sink.emit(event);
                     }
                 }
-                Err(e) => soft(e)?,
+                Err(e) => self.soft(e)?,
             }
         }
         Ok(())
@@ -300,7 +322,7 @@ impl Task {
             let states = match message_status(ws, session, &ids).await {
                 Ok(s) => s,
                 Err(e) => {
-                    soft(e)?;
+                    self.soft(e)?;
                     continue;
                 }
             };

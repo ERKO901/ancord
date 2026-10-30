@@ -1,6 +1,6 @@
 <script lang="ts">
   import { app, go } from "../lib/app.svelte";
-  import { connLabel, initials, stateLabel, timeShort } from "../lib/format";
+  import { connText, initials, stateLabel, timeShort } from "../lib/format";
   import Header from "../lib/ui/Header.svelte";
   import Icon from "../lib/ui/Icon.svelte";
 </script>
@@ -14,7 +14,7 @@
   </Header>
 
   <div class="chips">
-    <span class="chip dim" role="status"><span class="dot {app.conn}"></span>{connLabel[app.conn]}</span>
+    <span class="chip dim" role="status"><span class="dot {app.conn}"></span>{connText(app.conn, app.connIssue)}</span>
     <button class="chip dim" onclick={() => go("me")}>Moje adresa</button>
   </div>
 

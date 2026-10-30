@@ -1,6 +1,6 @@
 import { call, on } from "./ipc";
 import type {
-  ConnectionState, Contact, ConversationSummary, IdentityStatus, Message, Settings,
+  ConnectionIssue, ConnectionState, Contact, ConversationSummary, IdentityStatus, Message, Settings,
 } from "./types";
 
 export type View = "list" | "chat" | "contacts" | "contact" | "add" | "settings" | "me";
@@ -11,6 +11,7 @@ export const app = $state({
   ready: false,
   identity: { state: "none", passphrase: false } as IdentityStatus,
   conn: "offline" as ConnectionState,
+  connIssue: null as ConnectionIssue | null,
   settings: null as Settings | null,
   conversations: [] as ConversationSummary[],
   contacts: [] as Contact[],
@@ -57,6 +58,7 @@ async function enterReady(): Promise<void> {
     }),
     on("typing", ({ conversationId, on: isOn }) => { app.typing[conversationId] = isOn; }),
     on("connection_state", ({ state }) => { app.conn = state; }),
+    on("connection_issue", ({ issue }) => { app.connIssue = issue; }),
     on("contact_request", ({ contact }) => {
       if (!app.contacts.some((c) => c.id === contact.id)) app.contacts.push(contact);
       void refreshList();

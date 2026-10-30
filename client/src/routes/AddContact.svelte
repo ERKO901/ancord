@@ -25,11 +25,11 @@
   <form onsubmit={(e) => { e.preventDefault(); void add(); }}>
     <label>
       <span class="muted">Adresa</span>
-      <input class="field mono" placeholder="ancord:…" bind:value={address} autocomplete="off" autocapitalize="off" spellcheck="false" />
+      <input class="field mono" placeholder="ancord:…" bind:value={address} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
     </label>
     <label>
       <span class="muted">Jméno (jen u vás)</span>
-      <input class="field" placeholder="Například Alice" bind:value={name} autocomplete="off" />
+      <input class="field" placeholder="Například Alice" bind:value={name} autocomplete="off" autocorrect="off" />
     </label>
     <p class="muted hint">Adresu dostanete od kontaktu textem nebo QR kódem. Po přidání si ověřte bezpečnostní číslo mimo síť, jinak vám může někdo podstrčit cizí klíč.</p>
     <button class="btn primary" disabled={busy || !address.trim()}>Přidat</button>

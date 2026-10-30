@@ -94,6 +94,23 @@ impl Default for Settings {
     }
 }
 
+/// Proč se klient nepřipojil nebo spojení nefunguje (`null` = žádný problém). Rozlišení je hrubé a jen z textu chyb,
+/// UI z něj dostane srozumitelný důvod, ne adresy ani tickety.
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionIssue {
+    /// Worker nedostupný nebo bez sítě.
+    WorkerUnreachable,
+    /// Worker odpověděl chybou nebo neočekávanou odpovědí.
+    WorkerError,
+    /// Trasa nebo ticket se nepodařilo ověřit klíčem Workeru.
+    RouteUntrusted,
+    /// Žádný node z trasy se nepodařilo navázat.
+    NodeUnreachable,
+    /// Node odmítl požadavek klienta (nejspíš nesoulad verzí protokolu).
+    NodeRejected,
+}
+
 /// Události Rust → UI (`Events` v `types.ts`). Název události je `UiEvent::name`, tělo je varianta bez obalu.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(untagged)]
@@ -106,6 +123,7 @@ pub enum UiEvent {
     Typing { conversation_id: String, on: bool },
     ConnectionState { state: ConnectionState },
     ContactRequest { contact: Contact },
+    ConnectionIssue { issue: Option<ConnectionIssue> },
 }
 
 impl UiEvent {
@@ -116,6 +134,7 @@ impl UiEvent {
             UiEvent::Typing { .. } => "typing",
             UiEvent::ConnectionState { .. } => "connection_state",
             UiEvent::ContactRequest { .. } => "contact_request",
+            UiEvent::ConnectionIssue { .. } => "connection_issue",
         }
     }
 }

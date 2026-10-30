@@ -24,6 +24,18 @@ export function shortAddress(a: string): string {
 }
 
 export const connLabel = { offline: "Offline", connecting: "Připojování…", online: "Online" } as const;
+const issueLabel = {
+  worker_unreachable: "Offline: server nedostupný nebo bez sítě",
+  worker_error: "Server hlásí chybu",
+  route_untrusted: "Trasa se nepodařilo ověřit",
+  node_unreachable: "Offline: žádný uzel neodpovídá",
+  node_rejected: "Uzel odmítl požadavek (nejspíš starší verze)",
+} as const;
+
+/** Text stavu spojení; v offline přidá důvod posledního selhání. */
+export function connText(conn: keyof typeof connLabel, issue: keyof typeof issueLabel | null): string {
+  return conn === "offline" && issue ? issueLabel[issue] : connLabel[conn];
+}
 export const stateLabel = {
   queued: "Čeká na odeslání", pending: "Odesílá se", delivered: "Doručeno", unknown: "Stav neznámý",
 } as const;

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { mount, unmount, flushSync, tick } from "svelte";
 import { clearMocks } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
 import { installMockBackend } from "../src/lib/mock/backend";
 import { app, disposeListeners } from "../src/lib/app.svelte";
 import App from "../src/App.svelte";
@@ -52,6 +53,19 @@ describe("obrazovky (D4: každá se vykreslí a reaguje)", () => {
     expect(text()).toContain("Online");
     for (const n of ["Alice", "Bob", "Zátěž"]) expect(text()).toContain(n);
     expect(document.querySelector(".badge")?.textContent).toBe("1");
+  });
+
+  it("offline ukáže důvod selhání spojení a po připojení zmizí", async () => {
+    const backend = await start();
+    backend.setConnection("offline");
+    await emit("connection_issue", { issue: "node_rejected" });
+    await settle();
+    expect(text()).toContain("Uzel odmítl požadavek");
+    backend.setConnection("online");
+    await emit("connection_issue", { issue: null });
+    await settle();
+    expect(text()).not.toContain("Uzel odmítl");
+    expect(text()).toContain("Online");
   });
 
   it("konverzace: virtuální seznam vykreslí jen okno, zpráva se odešle a pole se vyprázdní", async () => {

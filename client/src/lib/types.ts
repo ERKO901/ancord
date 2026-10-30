@@ -3,6 +3,8 @@
 
 export type DeliveryState = "queued" | "pending" | "delivered" | "unknown";
 export type ConnectionState = "offline" | "connecting" | "online";
+/** Proč spojení nejde (`null` = bez problému). */
+export type ConnectionIssue = "worker_unreachable" | "worker_error" | "route_untrusted" | "node_unreachable" | "node_rejected";
 export type ThemeChoice = "system" | "dark" | "light";
 export type IdentityState = "none" | "locked" | "ready";
 
@@ -85,6 +87,7 @@ export interface Events {
   typing: { conversationId: string; on: boolean };
   connection_state: { state: ConnectionState };
   contact_request: { contact: Contact };
+  connection_issue: { issue: ConnectionIssue | null };
 }
 
 export const COMMAND_NAMES = [

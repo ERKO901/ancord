@@ -1,7 +1,7 @@
 <script lang="ts">
   import { app, send } from "../lib/app.svelte";
   import { call } from "../lib/ipc";
-  import { connLabel } from "../lib/format";
+  import { connText } from "../lib/format";
   import Icon from "../lib/ui/Icon.svelte";
 
   let text = $state("");
@@ -59,14 +59,14 @@
     rows="1"
     placeholder="Napsat zprávu"
     aria-label="Zpráva"
-    autocomplete="off"
+    autocomplete="off" autocorrect="off"
     autocapitalize="sentences"
     spellcheck="false"
     enterkeyhint="send"
   ></textarea>
   <div class="row">
     <span class="chip dim status" title="Stav spojení">
-      <span class="dot {app.conn}"></span>{connLabel[app.conn]}
+      <span class="dot {app.conn}"></span>{connText(app.conn, app.connIssue)}
     </span>
     <button class="send" type="submit" disabled={!text.trim()} aria-label="Odeslat"><Icon name="send" size={22} /></button>
   </div>
