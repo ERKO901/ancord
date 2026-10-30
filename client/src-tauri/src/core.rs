@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ancord_core::encoding::{b64u_decode_array, b64u_encode, hex_encode};
+use ancord_core::message::{clean_name, pack};
 use ancord_core::net::{CliError, Session};
 use ancord_core::online::Persist;
 use ancord_core::user::{address_uri, parse_address, safety_number, UserKeys};
@@ -39,14 +40,49 @@ struct OutItem {
 struct StoredContact {
     pk: [u8; 32],
     contact: Contact,
+    /// Jméno, které kontaktu dal uživatel (prázdné = žádné). Má přednost před jménem od protistrany.
+    label: String,
     unread: u32,
     outbox: Vec<OutItem>,
+}
+
+impl StoredContact {
+    fn new(pk: [u8; 32], label: String, peer_name: Option<String>, verified: bool, unread: u32, outbox: Vec<OutItem>) -> Self {
+        let mut c = Self {
+            pk,
+            contact: Contact { id: conv_id(&pk), name: String::new(), address: address_uri(&pk), verified, peer_name },
+            label,
+            unread,
+            outbox,
+        };
+        c.refresh_name();
+        c
+    }
+
+    /// Zobrazované jméno: jméno od uživatele, jinak jméno od protistrany, jinak začátek klíče (než protistrana odpoví).
+    fn refresh_name(&mut self) {
+        self.contact.name = if !self.label.is_empty() {
+            self.label.clone()
+        } else if let Some(n) = &self.contact.peer_name {
+            n.clone()
+        } else {
+            short_key(&self.pk)
+        };
+    }
+}
+
+/// Zástupné jméno kontaktu, který se ještě neozval: začátek jeho adresy.
+fn short_key(pk: &[u8; 32]) -> String {
+    format!("{}…", b64u_encode(pk).chars().take(8).collect::<String>())
 }
 
 /// Záznam kontaktu v úložišti; klíč záznamu je `pk`. Kontakt a konverzace s ním mají stejné `id`.
 #[derive(Serialize, Deserialize)]
 struct ContactRec {
+    /// Jméno od uživatele (starší záznamy tu mají zástupné „Kontakt N“, to se při načtení zahodí).
     name: String,
+    #[serde(default)]
+    peer_name: Option<String>,
     verified: bool,
     #[serde(default)]
     unread: u32,
@@ -56,6 +92,7 @@ struct ContactRec {
 
 const IDENTITY_KEY: &[u8] = b"keys";
 const SETTINGS_KEY: &[u8] = b"app";
+const NAME_KEY: &[u8] = b"name";
 /// Nejdelší zpráva v bajtech UTF-8.
 const MAX_TEXT: usize = 16 * 1024;
 
@@ -68,6 +105,8 @@ pub(crate) struct Inner {
     passphrase: bool,
     contacts: Vec<StoredContact>,
     settings: Settings,
+    /// Jméno, které se odesílá ve zprávách (prázdné = žádné).
+    display_name: String,
     store: Option<Arc<Store>>,
     conn: ConnectionState,
 }
@@ -175,12 +214,13 @@ impl Shared {
     /// Zprávy čekající na odeslání: `(konverzace, klíč záznamu, text)`, v pořadí zařazení.
     pub(crate) fn queued(&self) -> Vec<(String, String, zeroize::Zeroizing<Vec<u8>>)> {
         let Ok((g, store)) = self.store() else { return Vec::new() };
+        let name = (!g.display_name.is_empty()).then_some(g.display_name.as_str());
         let mut out = Vec::new();
         for c in &g.contacts {
             for item in c.outbox.iter().filter(|i| i.sent.is_none()) {
                 let Ok(Some(raw)) = store.get(Table::Messages, item.key.as_bytes()) else { continue };
                 let Ok(rec) = serde_json::from_slice::<Message>(&raw) else { continue };
-                out.push((c.contact.id.clone(), item.key.clone(), zeroize::Zeroizing::new(rec.text.into_bytes())));
+                out.push((c.contact.id.clone(), item.key.clone(), zeroize::Zeroizing::new(pack(name, &rec.text))));
             }
         }
         out
@@ -244,7 +284,7 @@ fn put_message(store: &Store, key: &str, msg: &Message) -> Result<(), String> {
 }
 
 fn save_contact_rec(store: &Store, c: &StoredContact) -> Result<(), String> {
-    let rec = ContactRec { name: c.contact.name.clone(), verified: c.contact.verified, unread: c.unread, outbox: c.outbox.clone() };
+    let rec = ContactRec { name: c.label.clone(), peer_name: c.contact.peer_name.clone(), verified: c.contact.verified, unread: c.unread, outbox: c.outbox.clone() };
     let json = serde_json::to_vec(&rec).map_err(|e| e.to_string())?;
     store.put(Table::Contacts, &c.pk, &json).map_err(|e| e.to_string())
 }
@@ -275,13 +315,20 @@ impl StorePersist {
         let pk = session.peer.as_deref().and_then(b64u_decode_array::<32>).unwrap_or_default();
         let (mut g, store) = self.shared.store()?;
         let err = |e: String| CliError::Session(e);
+        // jméno, které protistrana uvedla v nejnovější přijaté zprávě (spec §15.14)
+        let peer_name = session.history.iter().rev().filter(|h| !h.outgoing).find_map(|h| h.name.clone());
         if new_contact && !g.contacts.iter().any(|c| c.pk == pk) {
-            let name = format!("Kontakt {}", g.contacts.len() + 1);
-            let contact = Contact { id: conv.clone(), name, address: address_uri(&pk), verified: false };
-            let c = StoredContact { pk, contact: contact.clone(), unread: 0, outbox: Vec::new() };
+            let c = StoredContact::new(pk, String::new(), peer_name.clone(), false, 0, Vec::new());
             save_contact_rec(&store, &c).map_err(err)?;
+            self.events.push(UiEvent::ContactRequest { contact: c.contact.clone() });
             g.contacts.push(c);
-            self.events.push(UiEvent::ContactRequest { contact });
+        } else if let Some(c) = g.contacts.iter_mut().find(|c| c.pk == pk) {
+            if peer_name.is_some() && c.contact.peer_name != peer_name {
+                c.contact.peer_name = peer_name;
+                c.refresh_name();
+                save_contact_rec(&store, c).map_err(err)?;
+                self.events.push(UiEvent::ContactUpdate { contact: c.contact.clone() });
+            }
         }
         let mut fresh = 0;
         for h in session.history.iter().filter(|h| !h.outgoing) {
@@ -434,16 +481,17 @@ impl Core {
         for (k, v) in store.scan(Table::Contacts, b"").map_err(|e| e.to_string())? {
             let pk: [u8; 32] = k.as_slice().try_into().map_err(|_| StoreError::Corrupt.to_string())?;
             let rec: ContactRec = serde_json::from_slice(&v).map_err(|_| StoreError::Corrupt.to_string())?;
-            contacts.push(StoredContact {
-                pk,
-                contact: Contact { id: conv_id(&pk), name: rec.name, address: address_uri(&pk), verified: rec.verified },
-                unread: rec.unread,
-                outbox: rec.outbox,
-            });
+            let legacy = rec.name.strip_prefix("Kontakt ").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+            let label = if legacy { String::new() } else { rec.name };
+            contacts.push(StoredContact::new(pk, label, rec.peer_name, rec.verified, rec.unread, rec.outbox));
         }
         s.settings = match store.get(Table::Settings, SETTINGS_KEY).map_err(|e| e.to_string())? {
             Some(v) => serde_json::from_slice(&v).map_err(|_| StoreError::Corrupt.to_string())?,
             None => Settings::default(),
+        };
+        s.display_name = match store.get(Table::Settings, NAME_KEY).map_err(|e| e.to_string())? {
+            Some(v) => String::from_utf8(v.to_vec()).map_err(|_| StoreError::Corrupt.to_string())?,
+            None => String::new(),
         };
         s.passphrase = store.passphrase();
         s.keys = Some(keys);
@@ -495,6 +543,22 @@ impl Core {
         Ok(addr)
     }
 
+    /// Změní heslo profilu (u profilu bez hesla ho nastaví). Vyžaduje odemčený trvalý profil a staré heslo, má-li ho.
+    /// Data se nepřešifrovávají, mění se jen obal hlavního klíče, takže biometrické odemykání zůstane platné.
+    pub fn passphrase_change(&self, old: Option<String>, new: &str) -> Result<(), String> {
+        if new.chars().count() < 8 {
+            return Err("Heslo musí mít alespoň 8 znaků".into());
+        }
+        self.with(|s| {
+            ready_keys(s)?;
+            let store = s.store.clone().ok_or_else(|| "Heslo vyžaduje trvalý profil".to_string())?;
+            let device = self.device_key()?;
+            store.change_passphrase(&device as &dyn DeviceKey, old.as_deref(), new, self.kdf).map_err(|e| e.to_string())?;
+            s.passphrase = true;
+            Ok(())
+        })
+    }
+
     pub fn address_get(&self) -> Result<String, String> {
         self.with(|s| ready_keys(s).map(|k| address_uri(&k.pk())))
     }
@@ -516,17 +580,52 @@ impl Core {
             if s.contacts.iter().any(|c| c.pk == pk) {
                 return Err("Kontakt už existuje".into());
             }
-            let name = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Kontakt {}", s.contacts.len() + 1));
-            let contact = Contact { id: conv_id(&pk), name, address: address_uri(&pk), verified: false };
-            let c = StoredContact { pk, contact: contact.clone(), unread: 0, outbox: Vec::new() };
+            let label = name.and_then(|n| clean_name(&n)).unwrap_or_default();
+            let c = StoredContact::new(pk, label, None, false, 0, Vec::new());
             if let Some(store) = &s.store {
                 save_contact_rec(store, &c)?;
             }
+            let contact = c.contact.clone();
             s.contacts.push(c);
             Ok(contact)
         })?;
         self.notify(Cmd::Flush);
         Ok(contact)
+    }
+
+    /// Přejmenuje kontakt jen u uživatele; prázdné jméno vrátí jméno od protistrany (nebo začátek klíče).
+    pub fn contact_rename(&self, id: &str, name: &str) -> Result<Contact, String> {
+        self.with(|s| {
+            ready_keys(s)?;
+            let c = s.contacts.iter_mut().find(|c| c.contact.id == id).ok_or_else(|| "Neznámý kontakt".to_string())?;
+            c.label = clean_name(name).unwrap_or_default();
+            c.refresh_name();
+            if let Some(store) = &s.store {
+                save_contact_rec(store, c)?;
+            }
+            Ok(c.contact.clone())
+        })
+    }
+
+    /// Jméno, které se posílá ve zprávách (prázdné = nepošle se žádné).
+    pub fn display_name_get(&self) -> Result<String, String> {
+        self.with(|s| {
+            ready_keys(s)?;
+            Ok(s.display_name.clone())
+        })
+    }
+
+    /// Nastaví jméno do dalších zpráv. Dřívější zprávy ho už mají; protistrana ho převezme z první nové.
+    pub fn display_name_set(&self, name: &str) -> Result<String, String> {
+        self.with(|s| {
+            ready_keys(s)?;
+            let name = clean_name(name).unwrap_or_default();
+            if let Some(store) = &s.store {
+                store.put(Table::Settings, NAME_KEY, name.as_bytes()).map_err(|e| e.to_string())?;
+            }
+            s.display_name = name.clone();
+            Ok(name)
+        })
     }
 
     pub fn contact_list(&self) -> Result<Vec<Contact>, String> {
@@ -794,6 +893,84 @@ mod tests {
         assert_eq!(c.address_get().unwrap(), addr);
         assert!(c.identity_create(None).is_err());
         assert_eq!(c.identity_status().unwrap().state, IdentityState::Ready);
+    }
+
+    #[test]
+    fn contact_shows_the_key_until_the_peer_name_arrives_and_a_label_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = Core::persistent(dir.path().to_path_buf(), FAST, false).unwrap();
+        a.identity_create(None).unwrap();
+        let bob = ready().address_get().unwrap();
+        let c = a.contact_add(&bob, None).unwrap();
+        assert!(c.name.ends_with('…') && bob.contains(c.name.trim_end_matches('…')), "{}", c.name);
+        // jméno od protistrany (tak ho zapíše StorePersist při příjmu zprávy)
+        a.with(|s| {
+            let k = s.contacts.iter_mut().find(|k| k.contact.id == c.id).unwrap();
+            k.contact.peer_name = Some("Bob B.".into());
+            k.refresh_name();
+            save_contact_rec(s.store.as_ref().unwrap(), k)
+        })
+        .unwrap();
+        assert_eq!(a.contact_list().unwrap()[0].name, "Bob B.");
+        let renamed = a.contact_rename(&c.id, "  Bobík ").unwrap();
+        assert_eq!((renamed.name.as_str(), renamed.peer_name.as_deref()), ("Bobík", Some("Bob B.")));
+        drop(a);
+        let b = Core::persistent(dir.path().to_path_buf(), FAST, false).unwrap();
+        assert_eq!(b.contact_list().unwrap()[0].name, "Bobík");
+        assert_eq!(b.contact_rename(&c.id, "").unwrap().name, "Bob B.");
+    }
+
+    #[test]
+    fn legacy_placeholder_names_are_not_kept_as_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = Core::persistent(dir.path().to_path_buf(), FAST, false).unwrap();
+        a.identity_create(None).unwrap();
+        let bob = ready().address_get().unwrap();
+        let pk = parse_address(&bob).unwrap();
+        a.with(|s| save_contact_rec(s.store.as_ref().unwrap(), &StoredContact::new(pk, "Kontakt 2".into(), None, false, 0, Vec::new()))).unwrap();
+        drop(a);
+        let b = Core::persistent(dir.path().to_path_buf(), FAST, false).unwrap();
+        assert!(b.contact_list().unwrap()[0].name.ends_with('…'));
+    }
+
+    #[test]
+    fn display_name_is_cleaned_persisted_and_sent_with_queued_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = Core::persistent(dir.path().to_path_buf(), FAST, false).unwrap();
+        a.identity_create(None).unwrap();
+        assert_eq!(a.display_name_get().unwrap(), "");
+        assert_eq!(a.display_name_set("  Alice\u{202E} ").unwrap(), "Alice");
+        let c = a.contact_add(&ready().address_get().unwrap(), None).unwrap();
+        a.message_send(&c.id, "ahoj").unwrap();
+        let queued = a.shared.queued();
+        let content = ancord_core::message::unpack(&queued[0].2);
+        assert_eq!((content.name.as_deref(), content.text.as_str()), (Some("Alice"), "ahoj"));
+        drop(a);
+        let b = Core::persistent(dir.path().to_path_buf(), FAST, false).unwrap();
+        assert_eq!(b.display_name_get().unwrap(), "Alice");
+        assert_eq!(b.display_name_set("").unwrap(), "");
+    }
+
+    #[test]
+    fn passphrase_can_be_set_and_changed_and_keeps_the_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = Core::persistent(dir.path().to_path_buf(), FAST, false).unwrap();
+        let addr = a.identity_create(None).unwrap();
+        assert!(a.passphrase_change(None, "krátké").is_err(), "heslo má mít alespoň 8 znaků");
+        // profil bez hesla: heslo se nově nastaví
+        a.passphrase_change(None, "prvni-heslo").unwrap();
+        assert!(a.identity_status().unwrap().passphrase);
+        // změna vyžaduje správné staré heslo
+        assert_eq!(a.passphrase_change(None, "druhe-heslo").unwrap_err(), StoreError::Passphrase.to_string());
+        assert_eq!(a.passphrase_change(Some("spatne".into()), "druhe-heslo").unwrap_err(), StoreError::Unlock.to_string());
+        a.passphrase_change(Some("prvni-heslo".into()), "druhe-heslo").unwrap();
+        a.lock().unwrap();
+        drop(a);
+        let b = Core::persistent(dir.path().to_path_buf(), FAST, false).unwrap();
+        assert_eq!(b.identity_status().unwrap().state, IdentityState::Locked);
+        assert_eq!(b.unlock(Some("prvni-heslo".into())).unwrap_err(), StoreError::Unlock.to_string());
+        b.unlock(Some("druhe-heslo".into())).unwrap();
+        assert_eq!(b.address_get().unwrap(), addr);
     }
 
     #[test]

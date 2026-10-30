@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, go, saveSettings, lockNow, setBiometric, errText } from "../lib/app.svelte";
+  import { app, go, saveSettings, lockNow, setBiometric, changePassphrase, errText } from "../lib/app.svelte";
   import type { ThemeChoice } from "../lib/types";
   import Header from "../lib/ui/Header.svelte";
   import Icon from "../lib/ui/Icon.svelte";
@@ -8,6 +8,29 @@
   const themes: { v: ThemeChoice; l: string }[] = [
     { v: "system", l: "Systém" }, { v: "dark", l: "Tmavý" }, { v: "light", l: "Světlý" },
   ];
+  let pwOpen = $state(false);
+  let pwOld = $state("");
+  let pwNew = $state("");
+  let pwNew2 = $state("");
+  let pwBusy = $state(false);
+  let pwDone = $state(false);
+  const pwBad = $derived(pwNew.length < 8 || pwNew !== pwNew2 || (app.identity.passphrase && !pwOld));
+
+  async function savePassphrase() {
+    pwBusy = true;
+    try {
+      await changePassphrase(app.identity.passphrase ? pwOld : undefined, pwNew);
+      pwOpen = false;
+      pwOld = pwNew = pwNew2 = "";
+      pwDone = true;
+      setTimeout(() => (pwDone = false), 2500);
+    } catch (e) {
+      app.error = errText(e);
+    } finally {
+      pwBusy = false;
+    }
+  }
+
   const locks = [
     { v: 0, l: "Nikdy" }, { v: 60, l: "1 min" }, { v: 300, l: "5 min" }, { v: 900, l: "15 min" },
   ];
@@ -55,6 +78,21 @@
               <Switch label="Odemykat biometrikou" checked={app.bio.enabled} onchange={(v) => void setBiometric(v).catch((e) => (app.error = errText(e)))} />
             </div>
           {/if}
+          <button class="setting" aria-expanded={pwOpen} onclick={() => { pwOpen = !pwOpen; app.error = null; }}>
+            <span class="lead"><Icon name="key" size={20} /></span>
+            <span class="t"><strong>{app.identity.passphrase ? "Změnit heslo" : "Nastavit heslo"}</strong><span>{pwDone ? "Heslo je změněné." : app.identity.passphrase ? "Zprávy se nepřešifrovávají, platí hned." : "Zamkne profil heslem; bez něj se zprávy na pozadí nedešifrují."}</span></span>
+            <Icon name="chevron" size={20} />
+          </button>
+          {#if pwOpen}
+            <form class="pw" onsubmit={(e) => { e.preventDefault(); void savePassphrase(); }}>
+              {#if app.identity.passphrase}
+                <input class="field" type="password" placeholder="Současné heslo" aria-label="Současné heslo" bind:value={pwOld} autocomplete="current-password" />
+              {/if}
+              <input class="field" type="password" placeholder="Nové heslo (alespoň 8 znaků)" aria-label="Nové heslo" bind:value={pwNew} autocomplete="new-password" />
+              <input class="field" type="password" placeholder="Nové heslo znovu" aria-label="Nové heslo znovu" bind:value={pwNew2} autocomplete="new-password" />
+              <button class="btn primary" type="submit" disabled={pwBad || pwBusy}>{pwBusy ? "Ukládám…" : "Uložit heslo"}</button>
+            </form>
+          {/if}
           <button class="setting" onclick={() => void lockNow()}>
             <span class="lead"><Icon name="lock" size={20} /></span>
             <span class="t"><strong>Zamknout teď</strong><span>Obsah zpráv zmizí z paměti aplikace.</span></span>
@@ -96,5 +134,6 @@
   .seg { display: flex; gap: var(--space-2); flex-wrap: wrap; }
   .seg .chip { min-height: 38px; font-size: var(--fs-md); }
   .seg .chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .pw { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3) var(--space-4) var(--space-4); }
   .stack { flex-direction: column; align-items: flex-start; }
 </style>

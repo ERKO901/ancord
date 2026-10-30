@@ -6,7 +6,8 @@
   "permissions": [
     "core:event:default",
     "allow-identity-status", "allow-identity-create", "allow-address-get", "allow-address-qr",
-    "allow-contact-add", "allow-contact-list", "allow-contact-safety-number", "allow-contact-mark-verified",
+    "allow-contact-add", "allow-contact-list", "allow-contact-safety-number", "allow-contact-mark-verified", "allow-contact-rename",
+    "allow-display-name-get", "allow-display-name-set", "allow-passphrase-change",
     "allow-conversation-list", "allow-conversation-open", "allow-message-send", "allow-typing-set", "allow-conversation-delete",
     "allow-connection-state", "allow-settings-get", "allow-settings-set", "allow-lock", "allow-unlock",
     "allow-biometric-status", "allow-biometric-enable", "allow-biometric-disable", "allow-unlock-biometric"

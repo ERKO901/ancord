@@ -569,3 +569,11 @@ Token registruje klient přímo u Workeru (§10.1) pro schránku a pro příchoz
 **Razítko** je prefix `ct` schránky: `ct = pow_le_u64 ‖ obálka`. Platí hashcash (stejná funkce jako `pow` profilu) nad `sha256("ancord/v1/inbox-pow" ‖ 0x00 ‖ mailbox_id ‖ id ‖ obálka)` se solí `mailbox_id` a obtížností `bits`, takže razítko platí jen pro tuto zprávu v této schránce. Bez platného razítka anchor odpoví `pow_required` s `bits`; odesílatel razítko dopočítá s požadovanou obtížností (nejvýše 28) a zápis zopakuje. Náhrobky (potvrzení doručení) razítko nepotřebují. Příjemce razítko před zpracováním obálky (§15.4) odřízne. CLI zapíná stráž s `bits = 20`.
 
 **Mez:** stráž drahé zahlcení zdražuje, nezastaví ho. Útočník s výpočetním výkonem schránku dál zaplní až po strop nedoručených zpráv a majitel proti tomu může jen zvýšit `bits` (a tím ztížit psaní i ostatním).
+
+### 15.14 Obsah zprávy a zobrazované jméno
+Plaintext zprávy (§13.2) je buď holý text UTF-8, nebo **rámec verze 1**: `0x01 ‖ n (1 B) ‖ name (n B UTF-8) ‖ text`, kde `n ≤ 64`. `name` je zobrazované jméno odesílatele (nejvýše 32 znaků). Příjemce rámec rozpozná podle první bajtu `0x01`; plaintext, který není platný rámec (chybná délka, `n > 64`), čte jako holý text, takže starší klienti a CLI dál fungují. Text, který sám začíná bajtem `0x01`, odesílatel uloží do rámce s `n = 0`. Prázdný plaintext zůstává keepalive (§13.2) a jméno nenese.
+
+- Jméno je součástí šifrovaného plaintextu: anchor ani node ho nevidí a nešíří se v profilu (§15.2). Nese ho každá zpráva, takže změna jména se k protistraně dostane s další zprávou.
+- Příjemce jméno **vyčistí**: bez řídicích a směrových znaků (U+202A–202E, U+2066–2069, U+200B–200F, U+FEFF), oříznuté, nejvýše 32 znaků. Neplatné jméno zahodí, zprávu ne.
+- Obálka (§15.4) jméno nenese. Příjemce zná jméno iniciátora z jeho první zprávy, iniciátor jméno příjemce až z jeho první odpovědi. Do té doby klient ukazuje začátek adresy.
+- Jméno je **tvrzení odesílatele**, ne ověřený fakt: kdokoli si může nastavit stejné jméno jako někdo jiný. Klient proto ukazuje jméno dohromady se stavem ověření (bezpečnostní číslo, §15.4) a dovoluje kontaktu dát vlastní jméno, které má přednost.

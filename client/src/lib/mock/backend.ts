@@ -55,12 +55,15 @@ export function createMockBackend(opts: MockOptions = {}) {
   let seq = 0;
   const id = () => `m${++seq}`;
 
+  let myName = "";
+  /** Kontakty bez jména od uživatele: ukazují jméno protistrany, jakmile ho pošle. */
+  const labelless = new Set<string>();
   const contacts: Contact[] = [];
   const messages = new Map<string, Message[]>();
   const unread = new Map<string, number>();
 
   const addContact = (name: string, address = `ancord:${b64u(43).split("").reverse().join("")}${contacts.length}`): Contact => {
-    const c: Contact = { id: `c${contacts.length + 1}`, name, address, verified: false };
+    const c: Contact = { id: `c${contacts.length + 1}`, name, address, verified: false, peerName: null };
     contacts.push(c);
     messages.set(c.id, []);
     return c;
@@ -116,7 +119,33 @@ export function createMockBackend(opts: MockOptions = {}) {
     contact_add: ({ address, name }) => {
       if (!/^(ancord:)?[A-Za-z0-9_-]{43}$/.test(address.trim())) throw "Neplatná adresa";
       if (contacts.some((c) => c.address === address.trim())) throw "Kontakt už existuje";
-      return addContact(name?.trim() || `Kontakt ${contacts.length + 1}`, address.trim());
+      const c = addContact(name?.trim() || `${address.trim().replace(/^ancord:/, "").slice(0, 8)}…`, address.trim());
+      if (!name?.trim()) labelless.add(c.id);
+      return c;
+    },
+    contact_rename: ({ id: cid, name }) => {
+      const c = contacts.find((x) => x.id === cid);
+      if (!c) throw "Neznámý kontakt";
+      const n = name.trim();
+      if (n) {
+        labelless.delete(c.id);
+        c.name = n;
+      } else {
+        labelless.add(c.id);
+        c.name = c.peerName ?? `${c.address.replace(/^ancord:/, "").slice(0, 8)}…`;
+      }
+      return { ...c };
+    },
+    display_name_get: () => myName,
+    display_name_set: ({ name }) => {
+      myName = name.trim().slice(0, 32);
+      return myName;
+    },
+    passphrase_change: ({ old, new: next }) => {
+      if (next.length < 8) throw "Heslo musí mít alespoň 8 znaků";
+      if (identity.passphrase && old !== passphrase) throw "Špatné heslo";
+      passphrase = next;
+      identity = { ...identity, passphrase: true };
     },
     contact_list: () => contacts.map((c) => ({ ...c })),
     contact_safety_number: ({ id: cid }) => digits(cid),
@@ -145,6 +174,12 @@ export function createMockBackend(opts: MockOptions = {}) {
           setTimeout(() => void emit("typing", { conversationId: cid, on: true }), opts.replyMs ?? 700);
           setTimeout(() => {
             const reply: Message = { id: id(), ts: Date.now(), mine: false, text: "Přijato. (simulovaná odpověď)", state: "delivered" };
+            const peer = contacts.find((x) => x.id === cid);
+            if (peer && labelless.has(peer.id) && !peer.peerName) {
+              peer.peerName = "Simulovaný soused";
+              peer.name = peer.peerName;
+              void emit("contact_update", { contact: { ...peer } });
+            }
             messages.get(cid)?.push(reply);
             void emit("typing", { conversationId: cid, on: false });
             void emit("message_received", { conversationId: cid, message: reply });

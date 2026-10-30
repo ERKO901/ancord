@@ -13,6 +13,7 @@ pub mod error;
 pub mod guard;
 pub mod hashcash;
 pub mod hrw;
+pub mod message;
 pub mod net;
 pub mod online;
 pub mod profile;

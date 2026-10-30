@@ -261,7 +261,12 @@ fn two_clients_chat_live_offline_and_without_duplicates() {
     bob.go_online(config.clone(), sink_b.clone()).unwrap();
     online(&rx_b, "Bob");
     let (alice, rx_a, sink_a) = client(dir_a.path());
-    let to_bob = alice.contact_add(&bob.address_get().unwrap(), Some("Bob".into())).unwrap();
+    bob.display_name_set("Bob B.").unwrap();
+    alice.display_name_set("Alice").unwrap();
+    // bez zadaného jména ukazuje Alice u Boba jeho klíč, dokud Bob neodpoví
+    let to_bob = alice.contact_add(&bob.address_get().unwrap(), None).unwrap();
+    assert!(bob.address_get().unwrap().contains(to_bob.name.trim_end_matches('…')));
+    assert_eq!(to_bob.peer_name, None);
     let first = alice.message_send(&to_bob.id, "ahoj z fronty").unwrap();
     assert_eq!(first.state, DeliveryState::Queued);
 
@@ -271,12 +276,19 @@ fn two_clients_chat_live_offline_and_without_duplicates() {
     let request = wait(&rx_b, 60, "contact request", |e| matches!(e, UiEvent::ContactRequest { .. }));
     let UiEvent::ContactRequest { contact: alice_at_bob } = request else { unreachable!() };
     assert_eq!(alice_at_bob.address, alice.address_get().unwrap());
+    // obálka jméno nenese, Bob ho zná až z první zprávy Alice (událost předchází zprávě)
+    let named = wait(&rx_b, 60, "Alice's name", |e| matches!(e, UiEvent::ContactUpdate { .. }));
+    assert!(matches!(named, UiEvent::ContactUpdate { contact } if contact.id == alice_at_bob.id && contact.name == "Alice"));
     assert_eq!(received(&rx_b, "first message"), (alice_at_bob.id.clone(), "ahoj z fronty".to_string()));
     state_of(&rx_a, &first.id, DeliveryState::Delivered);
 
     // odpověď a psaní živě oběma směry
     let reply = bob.message_send(&alice_at_bob.id, "ahoj Alice").unwrap();
+    // jakmile Bob odpověděl, Alice u něj místo klíče vidí jeho jméno (událost předchází zprávě)
+    let named = wait(&rx_a, 60, "contact update", |e| matches!(e, UiEvent::ContactUpdate { .. }));
+    assert!(matches!(named, UiEvent::ContactUpdate { contact } if contact.name == "Bob B."));
     assert_eq!(received(&rx_a, "reply"), (to_bob.id.clone(), "ahoj Alice".to_string()));
+    assert_eq!(alice.contact_list().unwrap()[0].name, "Bob B.");
     state_of(&rx_b, &reply.id, DeliveryState::Delivered);
     alice.typing_set(&to_bob.id, true);
     wait(&rx_b, 30, "typing", |e| matches!(e, UiEvent::Typing { conversation_id, on: true } if *conversation_id == alice_at_bob.id));

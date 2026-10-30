@@ -48,6 +48,26 @@ fn contact_add(core: State<Core>, address: String, name: Option<String>) -> Resu
 }
 
 #[tauri::command]
+fn contact_rename(core: State<Core>, id: String, name: String) -> Result<Contact, String> {
+    core.contact_rename(&id, &name)
+}
+
+#[tauri::command]
+fn display_name_get(core: State<Core>) -> Result<String, String> {
+    core.display_name_get()
+}
+
+#[tauri::command]
+fn display_name_set(core: State<Core>, name: String) -> Result<String, String> {
+    core.display_name_set(&name)
+}
+
+#[tauri::command]
+fn passphrase_change(core: State<Core>, old: Option<String>, new: String) -> Result<(), String> {
+    core.passphrase_change(old, &new)
+}
+
+#[tauri::command]
 fn contact_list(core: State<Core>) -> Result<Vec<Contact>, String> {
     core.contact_list()
 }
@@ -205,7 +225,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             identity_status, identity_create, address_get, address_qr,
-            contact_add, contact_list, contact_safety_number, contact_mark_verified,
+            contact_add, contact_list, contact_safety_number, contact_mark_verified, contact_rename,
+            display_name_get, display_name_set, passphrase_change,
             conversation_list, conversation_open, message_send, typing_set, conversation_delete,
             connection_state, settings_get, settings_set, lock, unlock,
             biometric_status, biometric_enable, biometric_disable, unlock_biometric,

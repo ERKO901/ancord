@@ -16,9 +16,12 @@ export interface IdentityStatus {
 
 export interface Contact {
   id: string;
+  /** Zobrazované jméno: od uživatele, jinak od protistrany, jinak začátek klíče (než protistrana odpoví). */
   name: string;
   address: string;
   verified: boolean;
+  /** Jméno, které si protistrana nastavila a poslala ve zprávě. Je to její tvrzení; ověřuje se bezpečnostním číslem. */
+  peerName: string | null;
 }
 
 export interface ConversationSummary {
@@ -74,6 +77,13 @@ export interface Commands {
   contact_list: [void, Contact[]];
   contact_safety_number: [{ id: string }, string];
   contact_mark_verified: [{ id: string }, void];
+  /** Jméno jen pro sebe; prázdné vrátí jméno od protistrany. */
+  contact_rename: [{ id: string; name: string }, Contact];
+  /** Moje jméno, které se posílá ve zprávách (prázdné = žádné). */
+  display_name_get: [void, string];
+  display_name_set: [{ name: string }, string];
+  /** Změní heslo profilu (u profilu bez hesla ho nastaví); `old` je povinné, když profil heslo má. */
+  passphrase_change: [{ old?: string; new: string }, void];
   conversation_list: [void, ConversationSummary[]];
   conversation_open: [{ id: string; before?: number; limit: number }, ConversationPage];
   message_send: [{ id: string; text: string }, Message];
@@ -97,12 +107,15 @@ export interface Events {
   typing: { conversationId: string; on: boolean };
   connection_state: { state: ConnectionState };
   contact_request: { contact: Contact };
+  /** Protistrana poslala (nové) jméno. */
+  contact_update: { contact: Contact };
   connection_issue: { issue: ConnectionIssue | null };
 }
 
 export const COMMAND_NAMES = [
   "identity_status", "identity_create", "address_get", "address_qr",
-  "contact_add", "contact_list", "contact_safety_number", "contact_mark_verified",
+  "contact_add", "contact_list", "contact_safety_number", "contact_mark_verified", "contact_rename",
+  "display_name_get", "display_name_set", "passphrase_change",
   "conversation_list", "conversation_open", "message_send", "typing_set", "conversation_delete",
   "connection_state", "settings_get", "settings_set", "lock", "unlock",
   "biometric_status", "biometric_enable", "biometric_disable", "unlock_biometric",

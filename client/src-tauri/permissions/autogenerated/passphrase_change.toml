@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-passphrase-change"
+description = "Enables the passphrase_change command without any pre-configured scope."
+commands.allow = ["passphrase_change"]
+
+[[permission]]
+identifier = "deny-passphrase-change"
+description = "Denies the passphrase_change command without any pre-configured scope."
+commands.deny = ["passphrase_change"]

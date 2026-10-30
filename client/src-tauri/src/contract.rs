@@ -44,11 +44,15 @@ pub struct IdentityStatus {
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct Contact {
     pub id: String,
+    /// Zobrazované jméno: od uživatele, jinak od protistrany, jinak začátek klíče.
     pub name: String,
     pub address: String,
     pub verified: bool,
+    /// Jméno, které si protistrana nastavila a poslala ve zprávě (její tvrzení, neověřené).
+    pub peer_name: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -125,6 +129,7 @@ pub enum UiEvent {
     Typing { conversation_id: String, on: bool },
     ConnectionState { state: ConnectionState },
     ContactRequest { contact: Contact },
+    ContactUpdate { contact: Contact },
     ConnectionIssue { issue: Option<ConnectionIssue> },
 }
 
@@ -136,6 +141,7 @@ impl UiEvent {
             UiEvent::Typing { .. } => "typing",
             UiEvent::ConnectionState { .. } => "connection_state",
             UiEvent::ContactRequest { .. } => "contact_request",
+            UiEvent::ContactUpdate { .. } => "contact_update",
             UiEvent::ConnectionIssue { .. } => "connection_issue",
         }
     }

@@ -330,6 +330,9 @@ pub struct HistoryEntry {
     /// `id` zprávy (b64u).
     pub id: String,
     pub text: String,
+    /// Jméno, které odesílatel uvedl ve zprávě (spec §15.14); u odeslaných vlastní.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 pub(crate) fn now_s() -> u64 {
@@ -400,7 +403,8 @@ impl Session {
     }
 
     fn record(&mut self, outgoing: bool, id: &[u8; 16], plaintext: &[u8]) {
-        self.history.push(HistoryEntry { ts: now_s(), outgoing, id: b64u_encode(id), text: String::from_utf8_lossy(plaintext).into_owned() });
+        let content = crate::message::unpack(plaintext);
+        self.history.push(HistoryEntry { ts: now_s(), outgoing, id: b64u_encode(id), text: content.text, name: content.name });
     }
 
     /// Zašifruje zprávu a posune řetěz. Stav je nutné uložit dřív, než se zpráva odešle, jinak by se po pádu

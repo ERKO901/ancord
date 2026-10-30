@@ -17,6 +17,8 @@ use hkdf::Hkdf;
 use rand::RngCore;
 use redb::{Database, TableDefinition};
 use sha2::Sha256;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use zeroize::Zeroizing;
 
 const CONTEXT: &str = "ancord/v1/client/";
@@ -201,7 +203,7 @@ pub type Record = (Vec<u8>, Zeroizing<Vec<u8>>);
 pub struct Store {
     db: Database,
     master: Zeroizing<[u8; 32]>,
-    passphrase: bool,
+    passphrase: AtomicBool,
 }
 
 impl Store {
@@ -235,7 +237,7 @@ impl Store {
             }
         }
         tx.commit().map_err(io)?;
-        Ok(Self { db, master, passphrase: passphrase.is_some() })
+        Ok(Self { db, master, passphrase: AtomicBool::new(passphrase.is_some()) })
     }
 
     pub fn open(path: &Path, device: &dyn DeviceKey, passphrase: Option<&str>) -> Result<Self, StoreError> {
@@ -248,11 +250,39 @@ impl Store {
         }
         let device_key = device.load_or_create()?;
         let master = unwrap_key(&blob, &device_key, passphrase.filter(|_| needs))?;
-        Ok(Self { db, master, passphrase: needs })
+        Ok(Self { db, master, passphrase: AtomicBool::new(needs) })
     }
 
     pub fn passphrase(&self) -> bool {
-        self.passphrase
+        self.passphrase.load(Ordering::Relaxed)
+    }
+
+    /// Změní (nebo nově nastaví) heslo: hlavní klíč se zabalí znovu, data v tabulkách ani biometrický obal zůstanou.
+    /// Staré heslo se ověří, i když se nemění pro jeho vlastní účel (u profilu s heslem je povinné).
+    pub fn change_passphrase(&self, device: &dyn DeviceKey, old: Option<&str>, new: &str, kdf: KdfParams) -> Result<(), StoreError> {
+        if new.is_empty() {
+            return Err(StoreError::Passphrase);
+        }
+        let blob = read_wrap(&self.db)?;
+        let needs = blob.get(1) == Some(&MODE_PASSPHRASE);
+        let old = old.filter(|p| !p.is_empty());
+        if needs && old.is_none() {
+            return Err(StoreError::Passphrase);
+        }
+        let device_key = device.load_or_create()?;
+        let master = unwrap_key(&blob, &device_key, old.filter(|_| needs))?;
+        if master.as_ref() != self.master.as_ref() {
+            return Err(StoreError::Unlock);
+        }
+        let fresh = wrap(&self.master, &device_key, Some(new), kdf)?;
+        let tx = self.db.begin_write().map_err(io)?;
+        {
+            let mut meta = tx.open_table(META).map_err(io)?;
+            meta.insert(WRAP_KEY, fresh.as_slice()).map_err(io)?;
+        }
+        tx.commit().map_err(io)?;
+        self.passphrase.store(true, Ordering::Relaxed);
+        Ok(())
     }
 
     /// Hlavní klíč úložiště pro obálku biometrikou (jen uvnitř shellu, do UI nikdy).
@@ -265,7 +295,7 @@ impl Store {
         let db = Database::open(path).map_err(io)?;
         let blob = read_wrap(&db)?;
         let master: [u8; 32] = master.try_into().map_err(|_| StoreError::Unlock)?;
-        Ok(Self { db, master: Zeroizing::new(master), passphrase: blob.get(1) == Some(&MODE_PASSPHRASE) })
+        Ok(Self { db, master: Zeroizing::new(master), passphrase: AtomicBool::new(blob.get(1) == Some(&MODE_PASSPHRASE)) })
     }
 
     fn cipher(&self, table: Table) -> Result<XChaCha20Poly1305, StoreError> {

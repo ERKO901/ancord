@@ -163,6 +163,7 @@ Důsledky:
 Prototyp `melo` měl uživatele s veřejným klíčem, vyhledání profilu, psaní a stav doručení. Ve v2 to platí také (`spec/PROTOCOL.md` §15):
 - **Adresa je veřejný klíč** (Ed25519). K němu patří podepsaný profil s X25519 klíčem pro dohodu tajemství. Profil leží na třech anchorech podle `sha256(pk)`, stejně jako mailboxy (HRW, kvorum), a hledá se podle `pk`.
 - **Napsat komukoli lze bez předchozí výměny tajemství**: iniciátor provede X3DH s podepsaným rotujícím prekey a jednorázovým prekey příjemce a pošle mu šifrovanou obálku do jeho schránky (`inbox_id` z adresy). Anchor v obálce nevidí odesílatele. Příjemce ji zpracuje, tajné prekeys po použití resp. rotaci smaže a obě strany pak používají mailboxy a Double Ratchet (podepsaný prekey příjemce je jeho první ratchet klíč). Únik dlouhodobých klíčů tak neprozradí zprávy, jejichž prekeys už neexistují (forward secrecy). Adresu protistrany lze ověřit mimo síť bezpečnostním číslem.
+- **Zobrazované jméno** (spec §15.14): uživatel si nastaví jméno, klient ho přidá do šifrovaného plaintextu každé zprávy. Kontakt přidaný podle adresy se do první odpovědi ukazuje jako začátek klíče (`AbCd1234…`), pak jako jméno, které protistrana poslala; jméno zadané uživatelem má přednost. Jméno je tvrzení odesílatele, spolehlivost dává až bezpečnostní číslo. Server ani anchor jméno nevidí.
 - **Typing** je nespolehlivý efemérní signál přes presence (gateway → anchor → gateway příjemce), nikdy se neukládá.
 - **Stav doručení** zjistí odesílatel dotazem na anchory (`pending`/`delivered`/`unknown`).
 - **Historie** je lokální u klienta. Server po `ack` drží jen náhrobek a klíč zprávy se v ratchetu zahazuje, takže starý ciphertext je nedešifrovatelný; držet ho déle by zvětšovalo, co operátor vidí, a nic by nepřineslo.
@@ -481,12 +482,13 @@ UI nikdy nedostane nic, co není zobrazení. Kontrakt je definovaný jednou, v T
 | Skupina | Příkazy |
 |---|---|
 | Identita | `identity_status`, `identity_create`, `address_get` (`ancord:<pk>`), `address_qr` (SVG) |
-| Kontakty | `contact_add(address)`, `contact_list`, `contact_safety_number(id)`, `contact_mark_verified(id)` |
+| Kontakty | `contact_add(address)`, `contact_list`, `contact_safety_number(id)`, `contact_mark_verified(id)`, `contact_rename(id, name)` |
+| Jméno a heslo | `display_name_get`, `display_name_set(name)`, `passphrase_change(old?, new)` |
 | Konverzace | `conversation_list`, `conversation_open(id, before?, limit)`, `message_send(id, text)`, `typing_set(id, on)`, `conversation_delete(id)` |
 | Stav | `connection_state`, `settings_get`, `settings_set` |
 | Zámek | `lock`, `unlock(passphrase?)` |
 
-**Události (Rust → UI)**: `message_received`, `delivery_state` (`pending`/`delivered`/`unknown`, §6.4), `typing`, `connection_state`, `contact_request` (nový kontakt přijatý z obálky).
+**Události (Rust → UI)**: `message_received`, `delivery_state` (`pending`/`delivered`/`unknown`, §6.4), `typing`, `connection_state`, `contact_request` (nový kontakt přijatý z obálky), `contact_update` (protistrana poslala jméno).
 
 **Pravidla pro UI**
 - Zprávy se zobrazují jako **čistý text**. Žádný HTML ani Markdown, žádné automatické načítání odkazů, náhledů ani obrázků. Odkazy se otevírají v systémovém prohlížeči až po potvrzení.
@@ -503,7 +505,7 @@ UI nikdy nedostane nic, co není zobrazení. Kontrakt je definovaný jednou, v T
 - **`master_key`** (32 B náhodných) je zabalený klíčem platformy:
   - Android: klíč v **Android Keystore** (StrongBox, je-li k dispozici), AES-GCM wrap, Kotlin plugin;
   - Windows: DPAPI; macOS: Keychain; Linux: Secret Service (`keyring`) [ověřit na stroji bez Secret Service, tam se nabídne režim s heslem].
-- **Režim s heslem** (volitelný): `master_key` se navíc zabalí klíčem z hesla (Argon2id). Cena: na pozadí nelze zprávy dešifrovat, takže wake na Androidu ukáže jen generické oznámení a zprávy se vyzvednou po odemknutí.
+- **Režim s heslem** (volitelný): `master_key` se navíc zabalí klíčem z hesla (Argon2id). Heslo lze změnit nebo dodatečně nastavit (`passphrase_change`): přebalí se jen `master_key` novým klíčem z hesla, tabulky se nepřešifrovávají a biometrický obal zůstane platný. Cena: na pozadí nelze zprávy dešifrovat, takže wake na Androidu ukáže jen generické oznámení a zprávy se vyzvednou po odemknutí.
 - **Zámek aplikace**: UI se po nečinnosti zamkne. Na Androidu volitelně biometrika (BiometricPrompt) před zobrazením UI. **Implementováno (0.3.0) pro profil s heslem:** hlavní klíč úložiště se zabalí AES-GCM klíčem v Keystore, který vyžaduje silnou biometrii při každém použití a zneplatní se přidáním nového otisku (`BiometricKey.kt`, soubor `bio.blob` ve složce profilu). Odemčení probíhá celé v Rustu přes JNI (příkazy `biometric_status`, `biometric_enable`, `biometric_disable`, `unlock_biometric`), hlavní klíč se do UI nedostane; heslo zůstává záložní cestou. Na pozadí se nic nemění: profil s heslem se bez uživatele neodemkne ani biometrikou (klíč potřebuje přítomnost uživatele). **Neověřeno na zařízení.** Zámek chrání zobrazení, klíč v Keystore je pro wake dostupný stále (bez vazby na biometrii), jinak by nešlo vyzvedávat na pozadí.
 - **Citlivé buffery** v Rustu mají `zeroize`. Bez `mlock` (kvůli `unsafe_code = forbid`).
 - **Nikde se neloguje** obsah zpráv, klíče ani tickety. Release build loguje jen události bez obsahu a na Androidu žádné citlivé řetězce nejdou do logcatu.

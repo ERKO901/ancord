@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-display-name-get"
+description = "Enables the display_name_get command without any pre-configured scope."
+commands.allow = ["display_name_get"]
+
+[[permission]]
+identifier = "deny-display-name-get"
+description = "Denies the display_name_get command without any pre-configured scope."
+commands.deny = ["display_name_get"]

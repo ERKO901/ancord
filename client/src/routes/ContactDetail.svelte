@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, go, markVerified, deleteConversation, errText } from "../lib/app.svelte";
+  import { app, go, markVerified, deleteConversation, renameContact, errText } from "../lib/app.svelte";
   import { call } from "../lib/ipc";
   import { shortAddress } from "../lib/format";
   import Avatar from "../lib/ui/Avatar.svelte";
@@ -10,13 +10,26 @@
   let safety = $state("");
   let confirmDelete = $state(false);
   let copied = $state(false);
+  let label = $state("");
+  let editing = $state(false);
 
   $effect(() => {
     const id = app.contactId;
     safety = "";
     confirmDelete = false;
+    editing = false;
     if (id) call("contact_safety_number", { id }).then((s) => { if (app.contactId === id) safety = s; }, (e) => { app.error = errText(e); });
   });
+
+  async function saveLabel() {
+    if (!contact) return;
+    try {
+      await renameContact(contact.id, label);
+      editing = false;
+    } catch (e) {
+      app.error = errText(e);
+    }
+  }
 
   async function copyAddress() {
     if (!contact) return;
@@ -37,6 +50,19 @@
       <div class="hero">
         <Avatar name={contact.name} size={96} />
         <h2>{contact.name}</h2>
+        {#if contact.peerName && contact.peerName !== contact.name}
+          <p class="muted small">Sám sebe nazývá „{contact.peerName}“</p>
+        {:else if !contact.peerName}
+          <p class="muted small">Jméno uvidíte, jakmile vám odpoví.</p>
+        {/if}
+        {#if editing}
+          <form class="rename" onsubmit={(e) => { e.preventDefault(); void saveLabel(); }}>
+            <input class="field" type="text" maxlength="32" placeholder={contact.peerName ?? "Jméno kontaktu"} aria-label="Jméno kontaktu" bind:value={label} />
+            <button class="btn primary" type="submit">Uložit</button>
+          </form>
+        {:else}
+          <button class="btn small-btn" onclick={() => { label = contact.name; editing = true; }}><Icon name="edit" size={18} />Přejmenovat</button>
+        {/if}
         {#if contact.verified}
           <span class="status ok"><Icon name="shieldcheck" size={18} />Ověřený kontakt</span>
         {:else}
@@ -86,5 +112,7 @@
   .small { font-size: var(--fs-sm); margin: 0; }
   .wrap { overflow-wrap: anywhere; }
   .row { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: var(--space-3); }
+  .rename { display: flex; gap: var(--space-2); width: 100%; max-width: 360px; }
+  .rename .field { flex: 1; min-width: 0; }
   .small-btn { min-height: 38px; padding: 0 var(--space-4); font-size: var(--fs-md); }
 </style>

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clearMocks } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { installMockBackend } from "../src/lib/mock/backend";
-import { app, boot, createIdentity, disposeListeners, go, loadOlder, lockNow, openChat, send, addContact } from "../src/lib/app.svelte";
+import { app, boot, createIdentity, disposeListeners, go, loadOlder, lockNow, openChat, send, addContact, renameContact, changePassphrase } from "../src/lib/app.svelte";
 
 async function fresh(opts: Parameters<typeof installMockBackend>[0] = {}) {
   disposeListeners();
@@ -105,5 +105,36 @@ describe("stav aplikace nad IPC", () => {
     await expect(addContact(addr)).rejects.toBe("Kontakt už existuje");
     go("contacts");
     expect(app.view).toBe("contacts");
+  });
+});
+
+describe("jména", () => {
+  it("kontakt bez jména ukazuje začátek klíče, po odpovědi jméno protistrany; vlastní jméno má přednost", async () => {
+    await fresh({ replyMs: 10 });
+    await boot();
+    const addr = `ancord:${"B".repeat(43)}`;
+    const c = await addContact(addr);
+    expect(c.name).toBe("BBBBBBBB…");
+    await openChat(c.id);
+    await send("ahoj");
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(app.contacts.find((x) => x.id === c.id)?.name).toBe("Simulovaný soused");
+    await renameContact(c.id, "Soused");
+    expect(app.contacts.find((x) => x.id === c.id)).toMatchObject({ name: "Soused", peerName: "Simulovaný soused" });
+    await renameContact(c.id, "");
+    expect(app.contacts.find((x) => x.id === c.id)?.name).toBe("Simulovaný soused");
+  });
+
+  it("moje jméno se uloží ořezané a změna hesla chce staré heslo", async () => {
+    await fresh();
+    await boot();
+    const { call } = await import("../src/lib/ipc");
+    expect(await call("display_name_set", { name: "  Jan  " })).toBe("Jan");
+    expect(await call("display_name_get")).toBe("Jan");
+    await expect(changePassphrase(undefined, "krátké")).rejects.toBe("Heslo musí mít alespoň 8 znaků");
+    await changePassphrase(undefined, "prvni-heslo");
+    expect(app.identity.passphrase).toBe(true);
+    await expect(changePassphrase("spatne", "druhe-heslo")).rejects.toBe("Špatné heslo");
+    await changePassphrase("prvni-heslo", "druhe-heslo");
   });
 });

@@ -61,6 +61,11 @@ async function enterReady(): Promise<void> {
     on("typing", ({ conversationId, on: isOn }) => { app.typing[conversationId] = isOn; }),
     on("connection_state", ({ state }) => { app.conn = state; }),
     on("connection_issue", ({ issue }) => { app.connIssue = issue; }),
+    on("contact_update", ({ contact }) => {
+      const i = app.contacts.findIndex((c) => c.id === contact.id);
+      if (i >= 0) app.contacts[i] = contact;
+      void refreshList();
+    }),
     on("contact_request", ({ contact }) => {
       if (!app.contacts.some((c) => c.id === contact.id)) app.contacts.push(contact);
       void refreshList();
@@ -170,6 +175,17 @@ export async function addContact(address: string, name?: string): Promise<Contac
 export async function markVerified(id: string): Promise<void> {
   await call("contact_mark_verified", { id });
   await refreshContacts();
+}
+
+export async function renameContact(id: string, name: string): Promise<void> {
+  await call("contact_rename", { id, name });
+  await Promise.all([refreshContacts(), refreshList()]);
+}
+
+export async function changePassphrase(old: string | undefined, next: string): Promise<void> {
+  await call("passphrase_change", old ? { old, new: next } : { new: next });
+  app.identity = await call("identity_status");
+  await refreshBio();
 }
 
 export async function deleteConversation(id: string): Promise<void> {

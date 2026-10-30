@@ -1,6 +1,6 @@
 <script lang="ts">
   // Ikony jsou zabalené v bundlu (§13.5), žádná síť. Čárové, 1.75 px, jako v hlavním designu.
-  type Name = "back" | "plus" | "send" | "settings" | "users" | "lock" | "check" | "check2" | "clock" | "shield" | "trash" | "copy" | "chat" | "alert" | "close" | "search" | "qr" | "user" | "info" | "share" | "chevron" | "shieldcheck" | "paste" | "userplus" | "bubble";
+  type Name = "back" | "plus" | "send" | "settings" | "users" | "lock" | "check" | "check2" | "clock" | "shield" | "trash" | "copy" | "chat" | "alert" | "close" | "search" | "qr" | "user" | "info" | "share" | "chevron" | "shieldcheck" | "paste" | "userplus" | "bubble" | "edit" | "key";
   let { name, size = 22 }: { name: Name; size?: number } = $props();
 
   const paths: Record<Name, string> = {
@@ -28,6 +28,8 @@
     shieldcheck: "M12 3 5 6v5.500c0 4.200 2.800 7.500 7 9 4.200-1.500 7-4.800 7-9V6zM9 12l2.200 2.200L15.500 10",
     paste: "M9 4h6v3H9zM7 5.500H5v15h14v-15h-2",
     userplus: "M10 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM3 20a7 7 0 0 1 13-3.500M19 8v6M16 11h6",
+    edit: "M4 20h4L19 9l-4-4L4 16zM13.500 6.500l4 4",
+    key: "M14.500 14a4.500 4.500 0 1 0-4-2.500L4 18v2h3v-2h2v-2h2l1.200-1.200c.7.200 1.500.2 2.300.2ZM16.500 8.500v.01",
     bubble: "M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-6l-4.500 3.500V17H6a2 2 0 0 1-2-2z",
   };
 </script>
