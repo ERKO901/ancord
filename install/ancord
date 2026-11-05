@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+# ancord: ovládací panel nodu. Bez argumentů otevře menu, jinak příkaz (viz `ancord help`).
+# Všechno, co node potřebuje, je v jedné složce ($ANCORD_HOME, výchozí ~/.ancord); mimo ni je jen odkaz
+# v ~/.local/bin a (volitelně) uživatelská systemd služba. `ancord uninstall` vše odstraní.
+set -euo pipefail
+umask 077
+
+SELF=$(readlink -f "${BASH_SOURCE[0]}")
+HOME_DIR=${ANCORD_HOME:-$(dirname "$(dirname "$SELF")")}
+BIN=$HOME_DIR/bin
+DATA=$HOME_DIR/data
+CONF=$HOME_DIR/config.env
+LOG=$HOME_DIR/node.log
+PIDFILE=$HOME_DIR/node.pid
+UNIT_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+UNIT=$UNIT_DIR/ancord-node.service
+REPO=ERKO901/ancord
+HEALTH=http://127.0.0.1:8080/health
+
+if [ -t 1 ]; then B=$'\e[1m'; G=$'\e[32m'; R=$'\e[31m'; Y=$'\e[33m'; D=$'\e[2m'; N=$'\e[0m'; else B=; G=; R=; Y=; D=; N=; fi
+die() { echo "${R}chyba:${N} $*" >&2; exit 1; }
+[ -x "$BIN/ancord-node" ] || die "nenalezen $BIN/ancord-node (instalace je poškozená, spusťte instalátor znovu)"
+
+# ---------- konfigurace ----------
+# config.env je jen KEY=VALUE; nikdy se nesourcuje, hodnoty se čtou po řádcích.
+cfg_get() { sed -n "s/^$1=//p" "$CONF" 2>/dev/null | tail -n1; }
+cfg_set() { # cfg_set KEY VALUE ; prázdná hodnota klíč odstraní (= automaticky)
+  local tmp; tmp=$(mktemp "$CONF.XXXXXX")
+  { grep -v "^$1=" "$CONF" 2>/dev/null || true; [ -z "$2" ] || echo "$1=$2"; } >"$tmp"
+  mv "$tmp" "$CONF"
+}
+shown() { local v; v=$(cfg_get "$1"); echo "${v:-auto ($2)}"; }
+
+host_cores() { nproc 2>/dev/null || echo 1; }
+host_ram_mb() { awk '/^MemTotal:/ {print int($2/1024)}' /proc/meminfo; }
+host_free_gb() { df -Pk "$DATA" | awk 'NR==2 {print int($4/1048576)}'; }
+
+# ---------- běh nodu ----------
+use_systemd() { [ -f "$UNIT" ] && command -v systemctl >/dev/null 2>&1; }
+pid_alive() {
+  local p; [ -f "$PIDFILE" ] || return 1
+  p=$(cat "$PIDFILE" 2>/dev/null) || return 1
+  [ -n "$p" ] && kill -0 "$p" 2>/dev/null && tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q ancord-node
+}
+is_running() { if use_systemd; then systemctl --user is-active --quiet ancord-node; else pid_alive; fi; }
+
+node_env() { # proměnné pro node: pevné + z config.env (jen povolené klíče)
+  echo "DATA_DIR=$DATA"; echo "LISTEN=127.0.0.1:8080"; echo "CLOUDFLARED_BIN=$BIN/cloudflared"
+  echo "RUST_LOG=info"; echo "NODE_NAME=$(hostname -s 2>/dev/null || echo node)"
+  grep -E '^(WORKER_URL|WORKER_PUBKEY|CLAIM_CPU_CORES|CLAIM_RAM_MB|CLAIM_STORAGE_GB|CLAIM_BANDWIDTH_MBPS|MAX_CONNS)=[A-Za-z0-9_./:@-]+$' "$CONF" || true
+}
+
+do_start() {
+  is_running && { echo "Node už běží."; return; }
+  mkdir -p "$DATA"; chmod 700 "$DATA"
+  if use_systemd; then systemctl --user start ancord-node
+  else
+    ( while IFS= read -r l; do export "$l"; done < <(node_env)
+      exec setsid nohup nice -n 10 "$BIN/ancord-node" >>"$LOG" 2>&1 </dev/null ) &
+    echo $! >"$PIDFILE"
+  fi
+  sleep 1
+  is_running && echo "${G}Node spuštěn.${N}" || die "node se nespustil, viz ${B}ancord logs${N}"
+}
+
+do_stop() {
+  is_running || { echo "Node neběží."; return; }
+  if use_systemd; then systemctl --user stop ancord-node
+  else
+    local p; p=$(cat "$PIDFILE"); kill -TERM "$p"
+    for _ in $(seq 1 20); do kill -0 "$p" 2>/dev/null || break; sleep 0.5; done
+    kill -0 "$p" 2>/dev/null && kill -KILL "$p"
+    rm -f "$PIDFILE"
+  fi
+  echo "Node zastaven."
+}
+
+do_status() {
+  local id; id=$(DATA_DIR=$DATA WORKER_URL=http://127.0.0.1:1 "$BIN/ancord-node" --init-identity 2>/dev/null | tail -n1 || true)
+  echo "${B}ancord node${N}  $(cat "$HOME_DIR/VERSION" 2>/dev/null || echo '?')"
+  if is_running; then
+    local h; h=$(curl -fsS --max-time 2 "$HEALTH" 2>/dev/null || true)
+    echo "Stav:       ${G}běží${N}$([ -n "$h" ] && echo " (health: $h)")"
+  else echo "Stav:       ${R}neběží${N}"; fi
+  echo "ID nodu:    ${id:-?}"
+  echo "Autostart:  $(use_systemd && systemctl --user is-enabled ancord-node 2>/dev/null || echo vypnuto)"
+  echo "Výkon:      $(cfg_get PROFILE | grep . || echo vlastní)"
+  echo "  CPU jádra $(shown CLAIM_CPU_CORES "$(host_cores)"), RAM $(shown CLAIM_RAM_MB "$(host_ram_mb)") MB, disk $(shown CLAIM_STORAGE_GB "$(host_free_gb)") GB"
+  echo "  pásmo $(shown CLAIM_BANDWIDTH_MBPS 100) Mbps, spojení $(shown MAX_CONNS 2000)"
+  echo "${D}Složka: $HOME_DIR${N}"
+}
+
+# ---------- výkon ----------
+apply_profile() { # název  jádra RAM disk pásmo spojení
+  cfg_set PROFILE "$1"; cfg_set CLAIM_CPU_CORES "$2"; cfg_set CLAIM_RAM_MB "$3"
+  cfg_set CLAIM_STORAGE_GB "$4"; cfg_set CLAIM_BANDWIDTH_MBPS "$5"; cfg_set MAX_CONNS "$6"
+}
+max1() { [ "$1" -ge 1 ] && echo "$1" || echo 1; }
+
+do_performance() {
+  local c r d; c=$(host_cores); r=$(host_ram_mb); d=$(host_free_gb)
+  echo "${B}Nastavení výkonu${N}  ${D}(stroj: $c jader, $r MB RAM, $d GB volného místa)${N}"
+  echo " 1) Úsporný    ¼ jader, ¼ RAM, ¼ místa (max 5 GB), 20 Mbps"
+  echo " 2) Vyvážený   ½ jader, ½ RAM, ½ místa (max 20 GB), 50 Mbps"
+  echo " 3) Plný       vše změřené, ¾ místa, 100 Mbps"
+  echo " 4) Vlastní    zadáte každou hodnotu"
+  echo " 0) Zpět"
+  local ch; read -r -p "> " ch || return 0
+  case $ch in
+    1) apply_profile úsporný "$(max1 $((c/4)))" "$(max1 $((r/4)))" "$(max1 $((d/4 > 5 ? 5 : d/4)))" 20 200 ;;
+    2) apply_profile vyvážený "$(max1 $((c/2)))" "$(max1 $((r/2)))" "$(max1 $((d/2 > 20 ? 20 : d/2)))" 50 1000 ;;
+    3) apply_profile plný "$c" "$r" "$(max1 $((d*3/4)))" 100 2000 ;;
+    4) cfg_set PROFILE ""
+       ask_num CLAIM_CPU_CORES "CPU jádra" "$c"; ask_num CLAIM_RAM_MB "RAM v MB" "$r"
+       ask_num CLAIM_STORAGE_GB "Místo na disku v GB (alokuje se!)" "$d"
+       ask_num CLAIM_BANDWIDTH_MBPS "Pásmo v Mbps" 100; ask_num MAX_CONNS "Max. spojení klientů" 2000 ;;
+    *) return 0 ;;
+  esac
+  echo "${G}Uloženo.${N} ${D}Node hlásí síti jen tvrzení; Worker výkon sám měří, nadsazené hodnoty neprojdou ověřením.${N}"
+  is_running && { read -r -p "Změna se projeví po restartu. Restartovat teď? [a/N] " a; [[ $a =~ ^[aAyY]$ ]] && { do_stop; do_start; }; } || true
+}
+ask_num() { # klíč popis výchozí
+  local cur v; cur=$(cfg_get "$1"); read -r -p "$2 [${cur:-$3}] (prázdné = ponechat, 'auto' = zjistit): " v || return 0
+  case $v in "") ;; auto) cfg_set "$1" "" ;; *[!0-9]*|0) echo "${Y}Neplatné číslo, ponecháno.${N}" ;; *) cfg_set "$1" "$v" ;; esac
+}
+
+# ---------- autostart, aktualizace, odinstalace ----------
+do_autostart() {
+  command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1 \
+    || die "uživatelský systemd není k dispozici; node spusťte ručně (${B}ancord start${N})"
+  case ${1:-} in
+    on)
+      do_stop
+      mkdir -p "$UNIT_DIR"
+      { echo "[Unit]"; echo "Description=ancord node"; echo "After=network-online.target"
+        echo "[Service]"; echo "Nice=10"; echo "Restart=on-failure"; echo "RestartSec=5"
+        node_env | sed 's/^/Environment=/'
+        echo "ExecStart=$BIN/ancord-node"; echo "StandardOutput=append:$LOG"; echo "StandardError=append:$LOG"
+        echo "[Install]"; echo "WantedBy=default.target"; } >"$UNIT"
+      systemctl --user daemon-reload; systemctl --user enable --now ancord-node
+      echo "${G}Autostart zapnutý.${N} ${D}Aby node běžel i bez přihlášení: sudo loginctl enable-linger $USER${N}" ;;
+    off)
+      systemctl --user disable --now ancord-node 2>/dev/null || true
+      rm -f "$UNIT"; systemctl --user daemon-reload; echo "Autostart vypnutý (node zastaven)." ;;
+    *) die "použití: ancord autostart on|off" ;;
+  esac
+}
+# Služba má konfiguraci zapečenou v unitě; po změně nastavení ji přegenerujeme.
+refresh_unit() { if use_systemd; then do_autostart on >/dev/null; fi; }
+
+do_update() {
+  echo "Stahuji instalátor nejnovější verze…"
+  local t; t=$(mktemp)
+  curl -fsSL "https://github.com/$REPO/releases/latest/download/install.sh" -o "$t" || die "stažení selhalo"
+  was=0; is_running && was=1
+  [ $was = 1 ] && do_stop
+  ANCORD_HOME=$HOME_DIR ANCORD_NO_HINTS=1 sh "$t"; rm -f "$t"
+  [ $was = 1 ] && "$HOME_DIR/bin/ancord" start
+  exit 0
+}
+
+do_uninstall() {
+  [ -f "$HOME_DIR/.ancord-home" ] || die "$HOME_DIR není instalace ancord (chybí značka .ancord-home), nic nemažu"
+  echo "${B}Odinstalace ancord${N}"
+  echo "Smaže se: $HOME_DIR (programy, nastavení, logy), odkaz v ~/.local/bin a případná systemd služba."
+  local purge=0 a
+  if [ "${1:-}" = "--purge" ]; then purge=1
+  elif [ "${1:-}" = "--keep-data" ]; then purge=0
+  else
+    echo "${Y}Složka data/ obsahuje klíč vašeho nodu. Bez něj má příští instalace nové ID.${N}"
+    read -r -p "Smazat i klíč a data nodu? [a/N] " a; [[ $a =~ ^[aAyY]$ ]] && purge=1
+  fi
+  if [ "${ANCORD_YES:-}" != 1 ]; then read -r -p "Opravdu odinstalovat? [a/N] " a; [[ $a =~ ^[aAyY]$ ]] || { echo "Zrušeno."; return; }; fi
+  is_running && do_stop
+  if [ -f "$UNIT" ]; then systemctl --user disable --now ancord-node 2>/dev/null || true; rm -f "$UNIT"; systemctl --user daemon-reload 2>/dev/null || true; fi
+  local link=${ANCORD_BIN_DIR:-$HOME/.local/bin}/ancord
+  [ "$(readlink -f "$link" 2>/dev/null)" = "$SELF" ] && rm -f "$link"
+  if [ $purge = 1 ]; then rm -rf "${HOME_DIR:?}"
+  else find "${HOME_DIR:?}" -mindepth 1 -maxdepth 1 ! -name data -exec rm -rf {} +; echo "Ponechána složka $DATA"; fi
+  echo "${G}Hotovo, ancord je odinstalován.${N}"
+  exit 0
+}
+
+# ---------- menu ----------
+menu() {
+  while true; do
+    clear 2>/dev/null || true
+    do_status; echo
+    if is_running; then echo " 1) Zastavit node"; else echo " 1) Spustit node"; fi
+    echo " 2) Restartovat"
+    echo " 3) Nastavení výkonu"
+    echo " 4) Autostart při přihlášení ($(use_systemd && echo zapnutý || echo vypnutý))"
+    echo " 5) Zobrazit log (Ctrl-C = zpět do shellu)"
+    echo " 6) Aktualizovat"
+    echo " 7) Odinstalovat"
+    echo " 0) Konec"
+    local ch; read -r -p "> " ch || exit 0
+    case $ch in
+      1) if is_running; then do_stop; else do_start; fi ;;
+      2) do_stop; do_start ;;
+      3) do_performance; refresh_unit ;;
+      4) if use_systemd; then do_autostart off; else do_autostart on; fi ;;
+      5) tail -n 40 -f "$LOG" ;;
+      6) do_update ;;
+      7) do_uninstall ;;
+      0|q) exit 0 ;;
+    esac
+    read -r -p "${D}Enter = pokračovat${N}" _ || exit 0
+  done
+}
+
+usage() {
+  cat <<EOF
+ancord – ovládání nodu
+
+  ancord               menu
+  ancord status        stav, ID nodu a nastavení
+  ancord start|stop|restart
+  ancord performance   nastavení výkonu
+  ancord autostart on|off
+  ancord logs          sledování logu
+  ancord update        aktualizace na nejnovější verzi
+  ancord uninstall [--keep-data|--purge]
+EOF
+}
+
+case ${1:-menu} in
+  menu) menu ;;
+  status) do_status ;;
+  start) do_start ;;
+  stop) do_stop ;;
+  restart) do_stop; do_start ;;
+  performance|perf) do_performance; refresh_unit ;;
+  autostart) do_autostart "${2:-}" ;;
+  logs) tail -n 40 -f "$LOG" ;;
+  update) do_update ;;
+  uninstall) do_uninstall "${2:-}" ;;
+  help|-h|--help) usage ;;
+  *) usage; exit 2 ;;
+esac

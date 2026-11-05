@@ -1,0 +1,46 @@
+# Release nodu: při tagu node-v* sestaví ancord-node pro Linux (x86_64, aarch64) a publikuje archivy,
+# install.sh a SHA256SUMS, ze kterých instaluje install/install.sh. Nic se nenasazuje do Cloudflare.
+name: release-node
+on:
+  push:
+    tags: ["node-v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
+          - { arch: aarch64, runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      # Sestavení v debian:bookworm kontejneru, aby binárka běžela i na starších distribucích (glibc 2.36).
+      - name: Build
+        run: |
+          docker run --rm -v "$PWD":/w -w /w/node rust:1.99-bookworm \
+            cargo build --release --locked -p ancord-node
+          mkdir out
+          cp node/target/release/ancord-node install/ancord out/
+          echo "${GITHUB_REF_NAME}" > out/VERSION
+          tar -czf ancord-node-linux-${{ matrix.arch }}.tar.gz -C out ancord-node ancord VERSION
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-${{ matrix.arch }}
+          path: ancord-node-linux-${{ matrix.arch }}.tar.gz
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - name: Checksums
+        run: |
+          cp install/install.sh dist/
+          cd dist && sha256sum ancord-node-linux-*.tar.gz > SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "ancord node $GITHUB_REF_NAME" --generate-notes

@@ -56,6 +56,9 @@ ancord --worker $WORKER_URL recv bob.json               # vypíše, dešifruje a
 ```
 Soubor konverzace obsahuje klíče (práva 0600) a stav ratchetu; ukládá se před odesláním, aby se číslo zprávy nepoužilo dvakrát. Obnova ze zálohy stavu ratchet poškodí. Ratchet je Double Ratchet: konverzace se po úniku stavu uzdraví, jakmile si strany vymění zprávy v obou směrech. Responder může psát až po první zprávě iniciátora.
 
+## Instalace pro uživatele
+`curl -fsSL https://github.com/ERKO901/ancord/releases/latest/download/install.sh | sh`, potom příkaz `ancord` (menu, výkon, autostart, odinstalace). Vše je v `~/.ancord`, viz `../install/` a `../ARCHITECTURE.md` §12.6.
+
 ## Docker
 `Dockerfile` sestaví image s `ancord-node`, CLI `ancord` a `cloudflared` (pevná verze a SHA-256, amd64 i arm64): `docker build -t ancord-node node/`. Kontejner běží jako uživatel `ancord` (uid 10001), data jsou ve volume `/data`, `HEALTHCHECK` volá `/health`. Šest nodů v Compose: `../dev/README.md`.
 

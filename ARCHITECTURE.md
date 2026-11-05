@@ -403,6 +403,10 @@ Pokud limity počtu tunelů nebo DNS záznamů nestačí, rozhodne se o sdílen�
 - Profil `dev` (sekce 10): genesis allowlist zapnutý, probation, hashcash a limity ASN vypnuté, peer witnessy vypnuté.
 - `dev/README.md` popisuje: nastavení `.env`, `docker compose up`, kontrolu registrace, vypnutí jednoho nodu pro test failoveru.
 
+### 12.6 Instalace nodu pro kohokoli (`install/`)
+
+`curl -fsSL https://github.com/ERKO901/ancord/releases/latest/download/install.sh | sh` nainstaluje node bez sudo do jedné složky `~/.ancord` (`bin/` s `ancord-node`, `cloudflared` a panelem `ancord`, `data/` s klíčem, `config.env`, `node.log`). Mimo ni vznikne jen odkaz `~/.local/bin/ancord` a na přání uživatelská systemd služba. Shell profil se nemění. Archivy i `cloudflared` se ověřují SHA-256 (`SHA256SUMS` z release, `cloudflared` pevná verze jako v `node/Dockerfile`); `WORKER_URL` a `WORKER_PUBKEY` jsou v instalátoru pevně (kořeny důvěry, §10). Příkaz `ancord` otevře menu: stav, start/stop, nastavení výkonu (profily úsporný/vyvážený/plný nebo vlastní `CLAIM_*`, `MAX_CONNS`; Worker výkon stejně měří), autostart, log, aktualizace, odinstalace (`ancord uninstall [--keep-data|--purge]`, klíč nodu se maže jen se souhlasem). Panel instaluje jen `ancord-node`; souborový CLI klient (`ancord-cli`, binárka `ancord`) se neinstaluje, aby se příkazy nekryly. Release staví `.github/workflows/release-node.yml` při tagu `node-v*`. Podporován je Linux x86_64 a aarch64; macOS a Windows zatím přes Docker/WSL. Stav: instalátor a panel ověřeny lokálně s vlastním „releasem“; autostart (systemd --user) a samotný release workflow zatím neběžely.
+
 ## 13. Klient (Android a desktop)
 
 Grafický klient pro Android a desktop (Windows, macOS, Linux). Jeden kód, jádro v Rustu, UI v TypeScriptu a CSS. Protokol se nemění (kromě jediného rozšíření push, viz 13.8); klient je stejný uživatel sítě jako dnešní CLI (`ancord online`, §6.4).
